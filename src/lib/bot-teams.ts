@@ -50,6 +50,36 @@ export function saveTeam(
   }
 }
 
+/** Chat adds nominated members without removing anyone already on the team. */
+export function addTeamMembers(
+  state: Directory,
+  name: string,
+  botIds: string[],
+  newId: () => string
+) {
+  const existing = state.teams?.find(
+    (team) => team.name.toLowerCase() === name.toLowerCase()
+  )
+  const id = existing?.id ?? newId()
+  const members = existing
+    ? [
+        ...state.bots.filter((bot) => bot.teamId === id).map((bot) => bot.id),
+        ...botIds,
+      ]
+    : botIds
+  const directory = saveTeam(
+    state,
+    { id: existing?.id, name: existing?.name ?? name, botIds: members },
+    () => id
+  )
+  const team = directory.teams.find((entry) => entry.id === id)!
+  return {
+    directory,
+    team,
+    members: directory.bots.filter((bot) => bot.teamId === id),
+  }
+}
+
 export function removeTeam(state: Directory, id: string) {
   return {
     teams: (state.teams ?? []).filter((team) => team.id !== id),

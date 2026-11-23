@@ -1,4 +1,9 @@
-import { botTeamInput, removeTeam, saveTeam } from "@/lib/bot-teams"
+import {
+  addTeamMembers,
+  botTeamInput,
+  removeTeam,
+  saveTeam,
+} from "@/lib/bot-teams"
 import { sameEndpoint } from "@/lib/choices"
 import { boardDraftSchema, boardEditSchema } from "@/lib/board"
 import type { BoardDraft, BoardEdit } from "@/lib/board"
@@ -624,6 +629,23 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
       crypto.randomUUID()
     )
     this.setState({ ...this.state, ...directory })
+  }
+
+  /** Bot operation only; browser edits use the replacement picker above. */
+  async groupBots(name: string, botIds: string[]) {
+    const parsed = botTeamInput.parse({ name, botIds })
+    if (
+      parsed.botIds.some((id) => !this.state.bots.some((bot) => bot.id === id))
+    )
+      return null
+    const { directory, team, members } = addTeamMembers(
+      this.state,
+      parsed.name,
+      parsed.botIds,
+      () => crypto.randomUUID()
+    )
+    this.setState({ ...this.state, ...directory })
+    return { team, members: members.map(({ id, name }) => ({ id, name })) }
   }
 
   @callable()

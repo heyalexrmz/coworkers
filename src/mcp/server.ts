@@ -82,6 +82,7 @@ function hubPort(env: Env, userId: string): HubPort {
   return {
     hasBot: (botId) => hub().hasBot(botId),
     listBots: () => hub().listBots(),
+    groupBots: (name, botIds) => hub().groupBots(name, botIds),
     readBot: (botId, limit) => hub().readBot(botId, limit),
     addBot: () => hub().addBot(),
     setPaused: (botId, paused) => hub().setPaused(botId, paused),

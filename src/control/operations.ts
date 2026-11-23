@@ -3,6 +3,7 @@ import type { ToolSet } from "ai"
 import { runOperation } from "./access"
 import {
   createBot,
+  createTeam,
   delegateTask,
   delegateTaskFromClient,
   deleteBot,
@@ -34,6 +35,7 @@ export const OPERATIONS = [
   listBots,
   readBot,
   createBot,
+  createTeam,
   updateBot,
   pauseBot,
   resumeBot,

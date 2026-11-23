@@ -3,6 +3,7 @@ import { DEFAULT_RULES } from "@/lib/types"
 import { accessCeiling, capRules, rulesCeiling, runOperation } from "./access"
 import {
   createBot,
+  createTeam,
   deleteBot,
   delegateTask,
   delegateTaskFromClient,
@@ -35,6 +36,7 @@ function fakeHub(patch: Partial<HubPort> = {}): HubPort {
     hasBot: vi.fn(async () => true),
     installedFrom: vi.fn(async () => []),
     listBots: vi.fn(async () => []),
+    groupBots: vi.fn(async () => null),
     readBot: vi.fn(async () => null),
     addBot: vi.fn(async () => ({
       id: "n1",
@@ -264,6 +266,7 @@ describe("visibleTo", () => {
       "list_bots",
       "read_bot",
       "create_bot",
+      "create_team",
       "update_bot",
       "pause_bot",
       "resume_bot",
@@ -279,6 +282,30 @@ describe("visibleTo", () => {
       "resume_bot",
       "delete_bot",
     ])
+  })
+})
+
+describe("create_team", () => {
+  it("needs manage access and saves a real sidebar group using agent links or IDs", async () => {
+    const hub = fakeHub({
+      groupBots: vi.fn(async () => ({
+        team: { id: "p", name: "Product" },
+        members: [{ id: "b9", name: "CTO" }],
+      })),
+    })
+    const input = { name: " Product ", bots: ["coworkers://bot/b9"] }
+    expect(
+      await runOperation(createTeam, ctx({ hub, caller: botCaller() }), input)
+    ).toMatchObject({ code: "denied" })
+    expect(hub.groupBots).not.toHaveBeenCalled()
+    expect(
+      await runOperation(
+        createTeam,
+        ctx({ hub, caller: botCaller({ level: "manage" }) }),
+        input
+      )
+    ).toMatchObject({ saved: true, team: "Product" })
+    expect(hub.groupBots).toHaveBeenCalledWith("Product", ["b9"])
   })
 })
 

@@ -4,6 +4,7 @@ import type {
   ActionClass,
   BotAttachment,
   BotSummary,
+  BotTeam,
   RulePolicy,
 } from "@/lib/types"
 
@@ -89,6 +90,13 @@ export interface OperationContext {
 export interface HubPort {
   hasBot(botId: string): Promise<boolean>
   listBots(): Promise<BotSummary[]>
+  groupBots(
+    name: string,
+    botIds: string[]
+  ): Promise<{
+    team: BotTeam
+    members: Pick<BotSummary, "id" | "name">[]
+  } | null>
   /** A bot's latest messages, oldest first. Null when there is no such bot. */
   readBot(botId: string, limit: number): Promise<BotTranscript | null>
   addBot(): Promise<BotSummary>

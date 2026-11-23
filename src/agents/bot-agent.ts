@@ -1868,6 +1868,7 @@ export class BotAgent extends Think<Env, BotState> {
     return {
       hasBot: async (botId) => (await hub()).hasBot(botId),
       listBots: async () => (await hub()).listBots(),
+      groupBots: async (name, botIds) => (await hub()).groupBots(name, botIds),
       readBot: async (botId, limit) => (await hub()).readBot(botId, limit),
       addBot: async () => (await hub()).addBot(),
       setPaused: async (botId, paused) =>

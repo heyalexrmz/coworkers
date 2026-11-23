@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { botTeamInput, removeTeam, saveTeam, sidebarTeams } from "./bot-teams"
+import {
+  addTeamMembers,
+  botTeamInput,
+  removeTeam,
+  saveTeam,
+  sidebarTeams,
+} from "./bot-teams"
 import type { BotSummary } from "./types"
 
 const bot = (id: string, name: string, teamId?: string): BotSummary => ({
@@ -58,6 +64,23 @@ describe("sidebar teams", () => {
       ["2", undefined],
     ])
     expect(removed.teams).toEqual([{ id: "ops", name: "Ops" }])
+  })
+
+  it("adds agents from chat without overwriting a team's other members", () => {
+    const initial = {
+      teams: [{ id: "product", name: "Product" }],
+      bots: [bot("1", "CTO", "product"), bot("2", "Engineer")],
+    }
+    const result = addTeamMembers(initial, "product", ["2"], () => "unexpected")
+    expect(result.directory.teams).toEqual(initial.teams)
+    expect(result.members.map(({ id }) => id)).toEqual(["1", "2"])
+    const retry = addTeamMembers(
+      result.directory,
+      "Product",
+      ["2"],
+      () => "unexpected"
+    )
+    expect(retry.directory).toEqual(result.directory)
   })
 
   it("rejects duplicate names and agents outside the directory", () => {

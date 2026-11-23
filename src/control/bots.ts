@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { botIdFromLink, botLink } from "@/lib/bot-links"
+import { TEAM_NAME_MAX } from "@/lib/bot-teams"
 import { isModelId } from "@/lib/models"
 import { ACTION_CLASSES, DEFAULT_RULES } from "@/lib/types"
 import type { ActionClass } from "@/lib/types"
@@ -362,6 +363,39 @@ export const createBot = defineOperation({
     }
     const name = patch.name?.trim() || bot.name
     return { created: true, bot: { ...bot, name }, link: botLink(bot.id) }
+  },
+})
+
+export const createTeam = defineOperation({
+  name: "create_team",
+  description:
+    "Create a named group in the user's Bots sidebar with existing agents, or add agents to a team with the same name. Use this when the user asks to create a team or group agents in the sidebar. It doesn’t change agent roles, permissions, or delegation. Each agent can only be in one team.",
+  input: z.object({
+    name: z.string().trim().min(1).max(TEAM_NAME_MAX),
+    bots: z.array(botRef).min(1),
+  }),
+  level: "manage",
+  effect: "write",
+  actionClass: "manage",
+  callers: ["bot"],
+  async run({ hub }, { name, bots }) {
+    const ids = bots.map(idOf)
+    if (ids.some((id) => !id))
+      return fail("invalid", "Use agent links or IDs from list_bots.")
+    const result = await hub.groupBots(name, ids)
+    if (!result)
+      return fail(
+        "not_found",
+        "One or more agents were not found. Check list_bots and try again."
+      )
+    return {
+      saved: true,
+      team: result.team.name,
+      members: result.members.map(({ id, name }) => ({
+        name,
+        link: botLink(id),
+      })),
+    }
   },
 })
 
