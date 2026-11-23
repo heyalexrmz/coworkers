@@ -4,6 +4,7 @@ import { Button } from "@cloudflare/kumo/components/button"
 import {
   AppWindowIcon,
   ArrowRightIcon,
+  BoardIcon,
   BotIcon,
   CaretDownIcon,
   CheckIcon,
@@ -35,6 +36,7 @@ const ORIGIN_ICONS: Record<DeskOrigin, React.ComponentType<IconProps>> = {
   script: TerminalIcon,
   bot: BotIcon,
   pipeline: PipelineIcon,
+  board: BoardIcon,
   chat: MessageIcon,
   settings: GearSixIcon,
   agent: PlugsConnectedIcon,

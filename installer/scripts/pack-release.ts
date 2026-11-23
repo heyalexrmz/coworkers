@@ -48,6 +48,7 @@ interface BuiltBinding {
   type: string
   value?: string
   exportName?: string
+  name?: string
 }
 
 interface BuiltConfig {
@@ -71,6 +72,11 @@ function apiBinding(name: string, b: BuiltBinding): ApiBinding | null {
       return { type: "ai", name }
     case "browser":
       return { type: "browser", name }
+    case "r2":
+      if (!b.name) throw new Error(`R2 binding ${name} has no bucket name`)
+      return { type: "r2_bucket", name, bucket_name: b.name }
+    case "send-email":
+      return { type: "send_email", name }
     case "worker-loader":
       return { type: "worker_loader", name }
     case "durable-object":

@@ -50,6 +50,7 @@ Teach `pack-release.ts` and `src/deploy/upload.ts` about the new type.
      | User Details: Read | `user-details.read` |
      | Account Settings: Read | `account-settings.read` |
      | Workers: Admin | `workers-scripts.admin` |
+     | Workers R2 Storage Write | `workers-r2.write` |
      | Workers Routes: Edit | `workers-routes.write` |
      | Zone: Read | `zone.read` |
      | Access: Apps and Policies: Write | `access.write` |
@@ -90,6 +91,7 @@ pnpm typecheck
 | Worker (tagged `coworkers`) | the name they pick |
 | Durable Object classes | `UserHub`, `BotAgent`, `AppLive` (first install only) |
 | AI Gateway | the name they pick (default `coworkers`), authenticated |
+| Private R2 bucket | `<worker-name>-attachments` for chat uploads |
 | Access organization | only if the account has none, with a one-time PIN login |
 | Access policy | `coworkers <name>: people` (their email list) |
 | Access policy | `coworkers <name>: share links and webhooks` (bypass) |

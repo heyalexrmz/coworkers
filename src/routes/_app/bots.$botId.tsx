@@ -331,6 +331,9 @@ function LiveBot({
     [hub.state.bots, botId]
   )
   const busy = chat.status === "submitted" || chat.status === "streaming"
+  const missingToolCall = chat.error?.message.startsWith(
+    "No tool invocation found for tool call ID"
+  )
 
   // The server sends only the newest messages (CLIENT_MESSAGES). Older ones
   // are kept here: loaded with "Show earlier", or pushed out of the window
@@ -517,13 +520,24 @@ function LiveBot({
         unreadFrom={unreadFrom}
       />
       {chat.error ? (
-        <p
-          role="alert"
-          className="mx-auto w-full max-w-[820px] px-4 pb-2 text-sm text-kumo-danger md:px-6"
-        >
-          {chat.error.message ||
-            "Something went wrong. Try sending that again."}
-        </p>
+        <div className="mx-auto flex w-full max-w-[820px] flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 pb-2 text-sm md:px-6">
+          <p role="alert" className="text-kumo-danger">
+            {missingToolCall
+              ? "Chat lost track of a tool result. Reload the saved thread before trying again."
+              : chat.error.message ||
+                "Something went wrong. Try sending that again."}
+          </p>
+          {missingToolCall ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="rounded-full"
+              onClick={() => window.location.reload()}
+            >
+              Reload thread
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       {paused ? (
         <div className="mx-auto flex w-full max-w-[820px] items-center justify-between gap-3 px-4 pb-2 text-sm text-kumo-subtle md:px-6">

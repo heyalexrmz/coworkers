@@ -32,7 +32,14 @@ import type {
 } from "@cloudflare/think"
 import { createBrowserRuntime } from "@cloudflare/think/tools/browser"
 import type { BrowserRuntime } from "@cloudflare/think/tools/browser"
-import { exports } from "cloudflare:workers"
+import { env, exports } from "cloudflare:workers"
+import { boardDraftSchema } from "@/lib/board"
+import { routineScheduleTime } from "@/lib/routine-schedule"
+import {
+  attachmentKey,
+  parseAttachmentRef,
+  safeAttachmentName,
+} from "@/lib/attachments"
 import { callable, getAgentByName } from "agents"
 import { CHAT_MESSAGE_TYPES } from "agents/chat"
 import {
@@ -160,6 +167,8 @@ import type {
   HubPort,
 } from "@/control/operation"
 import { LoopGuard, TurnBudget, shapeToolResults } from "./guards"
+import { presentMcpImages } from "./mcp-tool-images"
+import { appToolModelOutput, unwrapToolResult } from "./mcp-tool-result"
 import { failureCard, replyCard, scriptCard, waitingCard } from "./desk"
 import type { DemoBotSeed } from "./demo-seed"
 import { MAX_MEMORY_CHARS, appendFact } from "./memory"
@@ -250,9 +259,11 @@ const TOOL_CLASS: Record<string, ActionClass> = {
   browser_execute: "browser",
   // message_bot, delegate_task and the bot-management operations.
   ...operationClasses(),
+  board_create_task: "bots",
   secret_request: "apps",
   schedule_routine: "routines",
   update_routine: "routines",
+  cancel_routine: "routines",
   send_email: "email",
   reply_email: "email",
   start_teaching: "browser",
@@ -643,7 +654,6 @@ function appToolName(connectionId: string, name: string) {
   )
 }
 
-/** MCP results carry text in `content`; an `isError` result becomes a throw. */
 function unescapeHtml(text: string) {
   return text
     .replace(/&quot;/g, '"')
@@ -651,19 +661,6 @@ function unescapeHtml(text: string) {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&")
-}
-
-function unwrapToolResult(result: unknown) {
-  const r = result as {
-    content?: { type: string; text?: string }[]
-    structuredContent?: unknown
-    isError?: boolean
-  }
-  if (r?.isError) {
-    const text = r.content?.map((c) => c.text ?? "").join("\n")
-    throw new Error(text || "The app returned an error.")
-  }
-  return r?.structuredContent ?? r?.content ?? result
 }
 
 /**
@@ -1529,6 +1526,7 @@ export class BotAgent extends Think<Env, BotState> {
             await hub.callAppTool(t.connectionId, t.name, args ?? {})
           )
         },
+        toModelOutput: appToolModelOutput,
       }),
     }
   }
@@ -1575,6 +1573,7 @@ export class BotAgent extends Think<Env, BotState> {
           )
           return unwrapToolResult(result)
         },
+        toModelOutput: appToolModelOutput,
       })
     }
     return tools
@@ -1928,6 +1927,70 @@ export class BotAgent extends Think<Env, BotState> {
 
   private botTools(): ToolSet {
     return {
+      board_create_task: tool({
+        description:
+          "Add a concrete follow-up to the shared Board. Set assigneeId to a teammate’s bot ID or leave it null for an idle bot to claim. Use only for work the user wants tracked or carried out later; cards can start automatically.",
+        inputSchema: boardDraftSchema.extend({
+          assigneeId: boardDraftSchema.shape.assigneeId.describe(
+            "Bot ID, or null to leave unassigned"
+          ),
+        }),
+        execute: async (input, { toolCallId }) => {
+          if (this.isBackgroundTurn())
+            return {
+              error: "Board tasks can only be created from interactive turns.",
+            }
+          const hub = await this.hub()
+          const triggerId = this.messages.findLast((m) => m.role === "user")?.id
+          const { id } = await hub.addBoardTaskFromBot(
+            this.botId,
+            input,
+            `${triggerId ?? "turn"}:${toolCallId}`
+          )
+          return { id, path: `/board#card-${id}`, status: "queued" }
+        },
+      }),
+      open_attachment: tool({
+        description:
+          "Open an attachment:// reference from a chat message. Returns the first 16,000 characters for text files; set copyToWorkspace for binaries or when you need to use shell or file tools on the full file. The workspace copy is scratch, not the original.",
+        inputSchema: z.object({
+          ref: z.string(),
+          copyToWorkspace: z.boolean().optional(),
+        }),
+        execute: async ({ ref, copyToWorkspace }) => {
+          const file = parseAttachmentRef(ref)
+          const object = file ? await this.getAttachment(ref) : null
+          if (!file || !object) return { error: "Attachment not found." }
+          if (copyToWorkspace) {
+            const dir = `/workspace/scratch/attachments/${file.id}`
+            const path = `${dir}/${file.name}`
+            await this.workspace.fs.mkdir(dir, { recursive: true })
+            await this.workspace.fs.writeFile(
+              path,
+              new Uint8Array(await object.arrayBuffer())
+            )
+            return { path, size: object.size }
+          }
+          if (
+            !/\.(txt|md|csv|tsv|json|jsonl|xml|html|ya?ml|log)$/i.test(
+              file.name
+            )
+          ) {
+            await object.body.cancel()
+            return {
+              name: file.name,
+              size: object.size,
+              next: "Set copyToWorkspace to use file tools on this attachment.",
+            }
+          }
+          const text = await object.text()
+          return {
+            name: file.name,
+            text: text.slice(0, 16_000),
+            truncated: text.length > 16_000,
+          }
+        },
+      }),
       set_name: tool({
         description:
           "Give yourself a name that describes your job, 1-3 words in Title Case. Call once, when the user first tells you what you are for.",
@@ -2349,16 +2412,24 @@ export class BotAgent extends Think<Env, BotState> {
 
       schedule_routine: tool({
         description:
-          "Schedule work for later. Use `cron` (5-field, UTC) for something recurring, or `at` (ISO 8601 date-time) for a one-off. When it fires you receive `prompt` as a new task, with no memory of this conversation. If you just did the task, write down the method that worked so the routine does not have to rediscover it.",
+          "Schedule a durable wake-up to do work later. Use `at` (future ISO 8601 date-time with an explicit UTC offset or Z) for a specific date and time, or `cron` (five fields, UTC) for recurring work. The tool returns the actual next run. Write a self-contained prompt so the bot can do the work without depending on this conversation.",
         inputSchema: z.object({
-          name: z.string().describe("Short label, e.g. 'Morning inbox digest'"),
+          name: z
+            .string()
+            .trim()
+            .min(1)
+            .max(120)
+            .describe("Short label, e.g. 'Morning inbox digest'"),
           prompt: z
             .string()
+            .trim()
+            .min(1)
+            .max(8000)
             .describe(
               "Self-contained instructions for your future self: the goal, the exact method that worked (tool, URL, CSS selectors or schema, skill file), and how to format the report"
             ),
-          cron: z.string().optional(),
-          at: z.string().optional(),
+          cron: z.string().trim().min(1).optional(),
+          at: z.string().trim().min(1).optional(),
           onlyNew: z
             .boolean()
             .optional()
@@ -2370,18 +2441,27 @@ export class BotAgent extends Think<Env, BotState> {
           ),
         }),
         execute: async ({ name, prompt, cron, at, onlyNew, watch }) => {
-          if (!cron === !at) {
+          if (Boolean(cron) === Boolean(at)) {
             return { error: "Provide exactly one of `cron` or `at`." }
           }
-          const routine = await this.addRoutine({
-            name,
-            prompt,
-            when: (cron ?? at)!,
-            kind: cron ? "cron" : "once",
-            ...(onlyNew ? { onlyNew: true } : {}),
-            ...(watch ? { watch } : {}),
-          })
-          return { scheduled: routine }
+          try {
+            const { routine, nextRunAt } = await this.addRoutine({
+              name,
+              prompt,
+              when: (cron ?? at)!,
+              kind: cron ? "cron" : "once",
+              ...(onlyNew ? { onlyNew: true } : {}),
+              ...(watch ? { watch } : {}),
+            })
+            return { scheduled: routine, ...this.routineNextRun(nextRunAt) }
+          } catch (error) {
+            return {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Could not schedule the routine.",
+            }
+          }
         },
       }),
 
@@ -2390,10 +2470,10 @@ export class BotAgent extends Think<Env, BotState> {
           "Change a routine: fix its instructions when the method in them stopped working, or change its name, schedule or onlyNew. Only the fields you pass change.",
         inputSchema: z.object({
           id: z.string(),
-          name: z.string().optional(),
-          prompt: z.string().optional(),
-          cron: z.string().optional(),
-          at: z.string().optional(),
+          name: z.string().trim().min(1).max(120).optional(),
+          prompt: z.string().trim().min(1).max(8000).optional(),
+          cron: z.string().trim().min(1).optional(),
+          at: z.string().trim().min(1).optional(),
           onlyNew: z.boolean().optional(),
           watch: WATCH_INPUT.nullable()
             .optional()
@@ -2405,35 +2485,58 @@ export class BotAgent extends Think<Env, BotState> {
           if (cron && at) {
             return { error: "Provide at most one of `cron` or `at`." }
           }
-          const routine = await this.updateRoutine(id, {
-            ...patch,
-            ...(cron ? { when: cron, kind: "cron" as const } : {}),
-            ...(at ? { when: at, kind: "once" as const } : {}),
-          })
-          return routine ? { updated: routine } : { error: `No routine ${id}` }
+          try {
+            const updated = await this.updateRoutine(id, {
+              ...patch,
+              ...(cron ? { when: cron, kind: "cron" as const } : {}),
+              ...(at ? { when: at, kind: "once" as const } : {}),
+            })
+            return updated
+              ? {
+                  updated: updated.routine,
+                  ...this.routineNextRun(updated.nextRunAt),
+                }
+              : { error: `No routine ${id}` }
+          } catch (error) {
+            return {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Could not update the routine.",
+            }
+          }
         },
       }),
 
       list_routines: tool({
         description: "List your scheduled routines.",
         inputSchema: z.object({}),
-        execute: async () => ({
-          routines: this.state.routines.map((r) => {
-            const last = this.sql<RoutineRunRow>`SELECT * FROM routine_runs
+        execute: async () => {
+          const schedules = this.getSchedules<RoutinePayload>().filter(
+            (s) => s.callback === "runRoutine"
+          )
+          return {
+            routines: this.state.routines.map((r) => {
+              const last = this.sql<RoutineRunRow>`SELECT * FROM routine_runs
               WHERE routine_id = ${r.id} AND status != 'running'
               ORDER BY started_at DESC LIMIT 1`[0]
-            return last
-              ? {
-                  ...r,
-                  lastRun: {
-                    status: last.status,
-                    at: new Date(last.started_at).toISOString(),
-                    note: last.note,
-                  },
-                }
-              : r
-          }),
-        }),
+              const schedule = schedules.find((s) => s.payload.id === r.id)
+              return {
+                ...r,
+                ...(schedule ? this.routineNextRun(schedule.time * 1000) : {}),
+                ...(last
+                  ? {
+                      lastRun: {
+                        status: last.status,
+                        at: new Date(last.started_at).toISOString(),
+                        note: last.note,
+                      },
+                    }
+                  : {}),
+              }
+            }),
+          }
+        },
       }),
 
       cancel_routine: tool({
@@ -4349,9 +4452,10 @@ export class BotAgent extends Think<Env, BotState> {
   /** Keep long turns inside the context window (see shapeToolResults). */
   override beforeStep(ctx: PrepareStepContext): StepConfig | void {
     const shaped = shapeToolResults(ctx.messages)
+    const withImages = presentMcpImages(shaped ?? ctx.messages)
     const nudge = this.paceStep(ctx)
-    if (!shaped && !nudge) return
-    const messages = [...(shaped ?? ctx.messages)]
+    if (!shaped && !withImages && !nudge) return
+    const messages = [...(withImages ?? shaped ?? ctx.messages)]
     if (nudge) {
       messages.push({ role: "user", content: nudge.note })
     }
@@ -5004,7 +5108,7 @@ export class BotAgent extends Think<Env, BotState> {
       ...(options.task ? { task: options.task } : {}),
       ...(options.taskResult ? { taskResult: options.taskResult } : {}),
     }
-    await this.runTurn({
+    return this.runTurn({
       mode: "submit",
       idempotencyKey: options.key,
       input: {
@@ -5014,6 +5118,39 @@ export class BotAgent extends Think<Env, BotState> {
         metadata,
       },
     })
+  }
+
+  /** A Board claim starts a normal background turn, without interrupting chat or approvals. */
+  async receiveBoardTask(
+    cardId: string,
+    runId: string,
+    title: string,
+    description: string
+  ) {
+    if (
+      this.state.paused ||
+      this.state.status !== "idle" ||
+      this.#turnActive ||
+      this.hasPendingApproval()
+    )
+      return false
+    const submission = await this.submitAs(
+      { kind: "board", name: title },
+      `[Board task]\n${title}${description ? `\n\n${description}` : ""}`,
+      {
+        background: true,
+        key: `board:${runId}`,
+        task: { id: runId, replyTo: { kind: "board", cardId } },
+      }
+    )
+    if (
+      submission.status === "skipped" ||
+      submission.status === "error" ||
+      submission.status === "aborted"
+    ) {
+      throw new Error(submission.error ?? `Board turn ${submission.status}`)
+    }
+    return true
   }
 
   /**
@@ -6133,11 +6270,21 @@ export class BotAgent extends Think<Env, BotState> {
       ...(routine.onlyNew ? { onlyNew: true } : {}),
       ...(routine.watch ? { watch: routine.watch } : {}),
     }
-    const when = routine.kind === "cron" ? routine.when : new Date(routine.when)
-    if (when instanceof Date && Number.isNaN(when.getTime())) {
-      throw new Error(`Invalid date: ${routine.when}`)
+    const when = routineScheduleTime(routine.kind, routine.when)
+    return this.schedule(when, "runRoutine", payload)
+  }
+
+  private routineNextRun(nextRunAt: number) {
+    const timeZone = this.state.proactive.timezone || "UTC"
+    return {
+      nextRunAt,
+      nextRunLocal: new Intl.DateTimeFormat("en", {
+        timeZone,
+        dateStyle: "full",
+        timeStyle: "long",
+      }).format(nextRunAt),
+      timeZone,
     }
-    await this.schedule(when, "runRoutine", payload)
   }
 
   private async cancelRoutineSchedule(id: string) {
@@ -6149,14 +6296,14 @@ export class BotAgent extends Think<Env, BotState> {
     for (const match of matches) await this.cancelSchedule(match.id)
   }
 
-  private async addRoutine(input: Omit<Routine, "id">): Promise<Routine> {
+  private async addRoutine(input: Omit<Routine, "id">) {
     const routine: Routine = { id: crypto.randomUUID().slice(0, 8), ...input }
-    await this.scheduleRoutine(routine)
+    const schedule = await this.scheduleRoutine(routine)
     this.setState({
       ...this.state,
       routines: [...this.state.routines, routine],
     })
-    return routine
+    return { routine, nextRunAt: schedule.time * 1000 }
   }
 
   private async updateRoutine(
@@ -6164,7 +6311,7 @@ export class BotAgent extends Think<Env, BotState> {
     patch: Partial<Omit<Routine, "id" | "watch">> & {
       watch?: Routine["watch"] | null
     }
-  ): Promise<Routine | null> {
+  ) {
     const current = this.state.routines.find((r) => r.id === id)
     if (!current) return null
     const next: Routine = { ...current }
@@ -6181,20 +6328,24 @@ export class BotAgent extends Think<Env, BotState> {
     if (patch.watch !== undefined) {
       if (patch.watch) next.watch = patch.watch
       else delete next.watch
-      // A new watch starts from a fresh baseline.
-      this.sql`DELETE FROM routine_watch WHERE routine_id = ${id}`
     }
     const stale = this.getSchedules<RoutinePayload>()
       .filter((s) => s.callback === "runRoutine" && s.payload.id === id)
       .map((s) => s.id)
-    // Schedule (and so validate) the new one before dropping the old.
-    await this.scheduleRoutine(next)
-    for (const scheduleId of stale) await this.cancelSchedule(scheduleId)
+    // Schedule (and so validate) the new one before dropping the old. The
+    // scheduler returns the existing ID when an identical cron is saved.
+    const schedule = await this.scheduleRoutine(next)
+    for (const scheduleId of stale) {
+      if (scheduleId !== schedule.id) await this.cancelSchedule(scheduleId)
+    }
+    if (patch.watch !== undefined) {
+      this.sql`DELETE FROM routine_watch WHERE routine_id = ${id}`
+    }
     this.setState({
       ...this.state,
       routines: this.state.routines.map((r) => (r.id === id ? next : r)),
     })
-    return next
+    return { routine: next, nextRunAt: schedule.time * 1000 }
   }
 
   private async removeRoutine(id: string) {
@@ -6798,11 +6949,25 @@ export class BotAgent extends Think<Env, BotState> {
       .filter((path) => path !== "" && path !== "/")
   }
 
-  /** An image or PDF from the workspace, for previews in the thread and Files pane. */
+  private getAttachment(ref: string) {
+    const key = attachmentKey(this.name, ref)
+    return key ? env.ATTACHMENTS.get(key) : null
+  }
+
+  /** An R2 attachment, or a workspace image/PDF for the Files pane and legacy messages. */
   @callable()
   async readFileData(
     path: string
   ): Promise<{ mediaType: string; base64: string }> {
+    if (path.startsWith("attachment://")) {
+      const object = await this.getAttachment(path)
+      if (!object) throw new Error("Attachment not found")
+      return {
+        mediaType:
+          object.httpMetadata?.contentType ?? "application/octet-stream",
+        base64: this.encodeFile(new Uint8Array(await object.arrayBuffer())),
+      }
+    }
     const normalized = `/${path.replace(/^\/+/, "")}`
     if (
       !normalized.startsWith(`${WORKSPACE_ROOT}/`) ||
@@ -6819,11 +6984,15 @@ export class BotAgent extends Think<Env, BotState> {
     if (stat.size > MAX_FILE_DATA_BYTES) throw new Error("File is too large")
     const stream = await this.workspace.fs.readFile(normalized)
     const bytes = new Uint8Array(await new Response(stream).arrayBuffer())
+    return { mediaType, base64: this.encodeFile(bytes) }
+  }
+
+  private encodeFile(bytes: Uint8Array) {
     let binary = ""
     for (let i = 0; i < bytes.length; i += 0x8000) {
       binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
     }
-    return { mediaType, base64: btoa(binary) }
+    return btoa(binary)
   }
 
   @callable()
@@ -6837,17 +7006,28 @@ export class BotAgent extends Think<Env, BotState> {
     }
   }
 
-  /** Save a file the user attached into the bot's inbox. */
+  /** Store the original privately in R2, not in the bot's workspace. */
   @callable()
   async uploadFile(name: string, base64: string): Promise<{ path: string }> {
-    const safe = name.replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "file"
+    if (base64.length > Math.ceil(MAX_UPLOAD_BYTES / 3) * 4) {
+      throw new Error("Attachments are limited to 5 MB")
+    }
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
     if (bytes.byteLength > MAX_UPLOAD_BYTES) {
       throw new Error("Attachments are limited to 5 MB")
     }
-    const path = `/workspace/inbox/${safe}`
-    await this.workspace.fs.mkdir("/workspace/inbox", { recursive: true })
-    await this.workspace.fs.writeFile(path, bytes)
+    const safe = safeAttachmentName(name)
+    const path = `attachment://${crypto.randomUUID()}/${safe}`
+    const ext = safe.slice(safe.lastIndexOf(".") + 1).toLowerCase()
+    // Never open active web formats such as HTML or SVG as same-origin blobs.
+    const contentType = /\.(png|jpe?g|gif|webp|bmp|pdf)$/i.test(safe)
+      ? ext === "bmp"
+        ? "image/bmp"
+        : MIME_TYPES[ext]
+      : undefined
+    await env.ATTACHMENTS.put(attachmentKey(this.name, path)!, bytes, {
+      httpMetadata: { contentType: contentType ?? "application/octet-stream" },
+    })
     return { path }
   }
 

@@ -138,6 +138,7 @@ export async function putScript(
     name: string
     /** Plain-text values to set, by binding name. */
     vars: Record<string, string>
+    attachmentsBucket?: string
     /** Secret values to set. Others already on the Worker are kept. */
     secrets: Record<string, string>
     assetsJwt: string
@@ -158,11 +159,17 @@ export async function putScript(
       `This Coworkers release does not declare ${missing.join(", ")}. Repack the installer from a newer Coworkers.`
     )
   }
-  const bindings: ApiBinding[] = worker.bindings.map((binding) =>
-    binding.type === "plain_text" && binding.name in target.vars
-      ? { ...binding, text: target.vars[binding.name] }
-      : binding
-  )
+  const bindings: ApiBinding[] = worker.bindings.map((binding) => {
+    if (binding.type === "plain_text" && binding.name in target.vars) {
+      return { ...binding, text: target.vars[binding.name] }
+    }
+    if (binding.type === "r2_bucket" && binding.name === "ATTACHMENTS") {
+      if (!target.attachmentsBucket)
+        throw new Error("Missing chat attachment bucket")
+      return { ...binding, bucket_name: target.attachmentsBucket }
+    }
+    return binding
+  })
   for (const [name, text] of Object.entries(target.secrets)) {
     bindings.push({ type: "secret_text", name, text })
   }

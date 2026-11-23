@@ -125,6 +125,22 @@ export const MODELS: ModelInfo[] = [
     context: 128_000,
     price: [0.35, 0.75],
   },
+  {
+    id: "@cf/thinkingmachines/inkling-2-small",
+    provider: "workers-ai",
+    name: "Inkling 2 Small",
+    blurb: "Efficient multimodal reasoning",
+    context: 1_048_576,
+    price: [0.3, 1],
+  },
+  {
+    id: "@cf/moonshotai/kimi-k2.6",
+    provider: "workers-ai",
+    name: "Kimi K2.6",
+    blurb: "Coding and vision",
+    context: 262_144,
+    price: [0.95, 4],
+  },
   // Anthropic
   {
     id: "anthropic/claude-sonnet-5.5",
@@ -149,6 +165,22 @@ export const MODELS: ModelInfo[] = [
     blurb: "Fast, for high volume",
     context: 1_000_000,
     price: [0.1, 0.5],
+  },
+  {
+    id: "anthropic/claude-sonnet-5",
+    provider: "anthropic",
+    name: "Claude Sonnet 5",
+    blurb: "Coding and multi-step work",
+    context: 1_000_000,
+    price: [2, 10],
+  },
+  {
+    id: "anthropic/claude-sonnet-4.6",
+    provider: "anthropic",
+    name: "Claude Sonnet 4.6",
+    blurb: "Previous-generation Sonnet",
+    context: 200_000,
+    price: [3, 15],
   },
   // OpenAI
   {
@@ -183,6 +215,30 @@ export const MODELS: ModelInfo[] = [
     context: 1_000_000,
     price: [5, 30],
   },
+  {
+    id: "openai/gpt-6.2-sol",
+    provider: "openai",
+    name: "GPT-6.2 Sol",
+    blurb: "General-purpose reasoning and coding",
+    context: 1_050_000,
+    price: [2, 10],
+  },
+  {
+    id: "openai/gpt-6.2-astra",
+    provider: "openai",
+    name: "GPT-6.2 Astra",
+    blurb: "Complex reasoning and long tasks",
+    context: 1_050_000,
+    price: [8, 40],
+  },
+  {
+    id: "openai/gpt-5.4-mini",
+    provider: "openai",
+    name: "GPT-5.4 Mini",
+    blurb: "Lower-cost everyday work",
+    context: 128_000,
+    price: [0.75, 4.5],
+  },
   // Google
   {
     id: "google/gemini-3.8-flash",
@@ -191,6 +247,30 @@ export const MODELS: ModelInfo[] = [
     blurb: "Fast agents",
     context: 1_048_576,
     price: [0.75, 3.75],
+  },
+  {
+    id: "google/gemini-4-carbon",
+    provider: "google",
+    name: "Gemini 4 Carbon",
+    blurb: "Complex reasoning and multi-step work",
+    context: 1_048_576,
+    price: [2, 10],
+  },
+  {
+    id: "google/gemini-4-hydrogen",
+    provider: "google",
+    name: "Gemini 4 Hydrogen",
+    blurb: "Lower-cost Gemini 4 option",
+    context: 1_048_576,
+    price: [1.5, 7.5],
+  },
+  {
+    id: "google/gemini-3.5-flash-lite",
+    provider: "google",
+    name: "Gemini 3.5 Flash-Lite",
+    blurb: "Lower-cost, high-volume tasks",
+    context: 1_048_576,
+    price: [0.3, 2.5],
   },
   {
     id: "google/gemini-4-argon",
@@ -221,6 +301,14 @@ export const MODELS: ModelInfo[] = [
     name: "Grok 4.6",
     blurb: "Coding and agents",
     context: 500_000,
+  },
+  {
+    id: "xai/grok-4.5",
+    provider: "xai",
+    name: "Grok 4.5",
+    blurb: "Coding and visual reasoning",
+    context: 500_000,
+    price: [2, 6],
   },
 ]
 

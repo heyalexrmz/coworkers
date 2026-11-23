@@ -48,6 +48,19 @@ export interface BotSummary {
   paused?: boolean
   /** Absent means "act". */
   access?: AccessLevel
+  /** Sidebar grouping only. Does not affect access or delegation. */
+  teamId?: string
+}
+
+export interface BotTeam {
+  id: string
+  name: string
+}
+
+export interface BotTeamInput {
+  id?: string
+  name: string
+  botIds: string[]
 }
 
 /**
@@ -106,6 +119,10 @@ export interface AppCatalog {
 
 export interface HubState {
   bots: BotSummary[]
+  /** Named sidebar groups; absent on older hubs. */
+  teams?: BotTeam[]
+  /** Shared work queue, owned by the UserHub. */
+  board?: import("./board").BoardTask[]
   connections: Connection[]
   /** Account-wide model choice. Absent on hubs created before models were configurable. */
   models?: ModelSettings
@@ -578,6 +595,7 @@ export interface MessageOrigin {
     | "app"
     | "crawl"
     | "pipeline"
+    | "board"
     | "script"
     /** The user changed something the bot needs to know, like its access. */
     | "settings"
@@ -616,6 +634,7 @@ export interface MessageMeta {
 export type TaskReplyTo =
   | { kind: "bot"; botId: string }
   | { kind: "pipeline"; runId: string; step: number }
+  | { kind: "board"; cardId: string }
   /** An outside agent over MCP: it reads the result with task_status. */
   | { kind: "client"; clientId: string }
 

@@ -39,11 +39,11 @@ flowchart LR
   Hub --> MCP["Your apps<br/>(MCP / Executor)"]
 ```
 
-| Durable Object | What it owns                                                        |
-| -------------- | ------------------------------------------------------------------- |
+| Durable Object | What it owns                                                                        |
+| -------------- | ----------------------------------------------------------------------------------- |
 | `UserHub`      | Your bot list, app connections, shared memory, installed skills, push subscriptions |
-| `BotAgent`     | One bot: chat, memory, rules, routines, files, browser, secrets      |
-| `AppLive`      | Live updates for a web app a bot built                              |
+| `BotAgent`     | One bot: chat, memory, rules, routines, files, browser, secrets                     |
+| `AppLive`      | Live updates for a web app a bot built                                              |
 
 - Each bot keeps everything in its own SQLite. There's no separate database.
 - You sign in to an app once, on the hub. Every bot uses that connection.
@@ -51,26 +51,26 @@ flowchart LR
 
 ## What a bot can do
 
-| Feature        | How it works                                                                 |
-| -------------- | ---------------------------------------------------------------------------- |
-| Chat           | Streaming, resumable turns. Names itself from your first task                |
-| Computer       | Files in `/workspace`, a shell (`curl`, `jq`) and JavaScript scripts in Dynamic Workers. No container. Scripts survive deploys and can pause for your OK before touching your apps |
-| Read the web   | Quick reads (markdown, extract, links, screenshot, PDF, crawl). Kitesurf first, Chromium fallback |
-| Drive a browser| A real Chromium session you can watch live                                  |
-| Take over      | Bot hands you its browser to sign in. You click **I'm done**, it continues   |
-| Your apps      | Calls tools on connected MCP servers or Executor                             |
-| Rules          | Per action type: allow, ask first, or block                                  |
-| Routines       | Cron or one-off jobs. Can watch a URL, command or saved script and only wake when it changes |
-| Spend          | What each bot cost this month and today, chat vs background, read from AI Gateway logs |
-| Check-ins      | Wakes every few hours, speaks only if something's worth saying             |
-| Memory         | Its own memory + one shared across all your bots. Both have version history  |
-| Open items     | Tracks things it's waiting on until they're resolved                         |
-| Other bots     | Messages and files to other bots                                             |
-| Web apps       | Builds small sites (trackers, dashboards) on its own data, shareable by link |
-| Teach by demo  | Records you doing a task in its browser, saves it as a skill                 |
-| Skills         | Installs Agent Skills from GitHub or a site, for one bot or all of them      |
-| Secrets        | You type an API key in a masked card. The bot uses it but never sees it      |
-| Wake-ups       | Inbound email, webhooks, and push notifications to you                       |
+| Feature         | How it works                                                                                                                                                                       |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chat            | Streaming, resumable turns. Names itself from your first task                                                                                                                      |
+| Computer        | Files in `/workspace`, a shell (`curl`, `jq`) and JavaScript scripts in Dynamic Workers. No container. Scripts survive deploys and can pause for your OK before touching your apps |
+| Read the web    | Quick reads (markdown, extract, links, screenshot, PDF, crawl). Kitesurf first, Chromium fallback                                                                                  |
+| Drive a browser | A real Chromium session you can watch live                                                                                                                                         |
+| Take over       | Bot hands you its browser to sign in. You click **I'm done**, it continues                                                                                                         |
+| Your apps       | Calls tools on connected MCP servers or Executor                                                                                                                                   |
+| Rules           | Per action type: allow, ask first, or block                                                                                                                                        |
+| Routines        | Cron or one-off jobs. Can watch a URL, command or saved script and only wake when it changes                                                                                       |
+| Spend           | What each bot cost this month and today, chat vs background, read from AI Gateway logs                                                                                             |
+| Check-ins       | Wakes every few hours, speaks only if something's worth saying                                                                                                                     |
+| Memory          | Its own memory + one shared across all your bots. Both have version history                                                                                                        |
+| Open items      | Tracks things it's waiting on until they're resolved                                                                                                                               |
+| Other bots      | Messages and files to other bots                                                                                                                                                   |
+| Web apps        | Builds small sites (trackers, dashboards) on its own data, shareable by link                                                                                                       |
+| Teach by demo   | Records you doing a task in its browser, saves it as a skill                                                                                                                       |
+| Skills          | Installs Agent Skills from GitHub or a site, for one bot or all of them                                                                                                            |
+| Secrets         | You type an API key in a masked card. The bot uses it but never sees it                                                                                                            |
+| Wake-ups        | Inbound email, webhooks, and push notifications to you                                                                                                                             |
 
 ## How a turn works
 
@@ -105,15 +105,15 @@ sequenceDiagram
 
 Each bot has one setting per action type:
 
-| Action type       | Default   |
-| ----------------- | --------- |
-| Edit files        | allow     |
-| Run commands      | allow     |
-| Read the web      | allow     |
-| Drive the browser | allow     |
-| Use connected apps| ask first |
-| Message other bots| allow     |
-| Schedule routines | allow     |
+| Action type        | Default   |
+| ------------------ | --------- |
+| Edit files         | allow     |
+| Run commands       | allow     |
+| Read the web       | allow     |
+| Drive the browser  | allow     |
+| Use connected apps | ask first |
+| Message other bots | allow     |
+| Schedule routines  | allow     |
 
 Nobody is around to approve a background turn. So by default it can only use
 app tools that are read-only.
@@ -153,12 +153,32 @@ tick the ones you want, and choose who gets them: **This bot** or **All bots**.
 
 Bots follow the skills you give them, so only install ones you trust.
 
+## Board
+
+Open **Board** from the sidebar to queue work for your bots. Create a task with
+an assignee, or leave it unassigned. Bots can also add cards during a chat.
+
+The team's heartbeat checks the queue every minute. It gives idle bots their
+assigned work first, then lets idle, configured bots claim unassigned cards.
+Paused or busy bots aren't interrupted. A run saves its result or blocker in
+**Review**, where you can mark it **Done** or move it back to **To do** to retry.
+Board runs follow the bot's usual background rules.
+
+## Routines
+
+Ask a bot in chat to do work later, for example: “On December 1 at 9 AM Pacific,
+review my open tasks and send me a summary.” The bot creates a one-time schedule
+and confirms when it will run. For repeating work, it creates a five-field UTC
+cron schedule. Fixed UTC schedules can shift by an hour in local time when
+clocks change. View or cancel active routines in the bot’s **Settings → Routines**.
+
 ## Ways to wake a bot
 
 ```mermaid
 flowchart LR
   Chat["You type"] --> Bot["BotAgent"]
   Cron["Routine / check-in"] --> Bot
+  Board["Board heartbeat"] --> Bot
   Mail["Email to user.bot@domain"] --> Bot
   Hook["POST /api/hooks/..."] --> Bot
   Other["Another bot"] --> Bot
@@ -168,16 +188,16 @@ flowchart LR
 
 ## Stack
 
-| Layer      | What we use                                                   |
-| ---------- | ------------------------------------------------------------- |
-| Runtime    | Cloudflare Workers, Durable Objects (SQLite)                  |
-| Agents     | `agents` SDK, `@cloudflare/think`, `@cloudflare/computer`     |
-| Models     | Workers AI, or any provider through AI Gateway                |
-| Browser    | Browser Run: Chromium, Live View, Kitesurf                    |
-| Sandboxing | Dynamic Workers (shell, scripts, bot-built app servers)       |
-| Inbound    | Email Routing, webhooks, Web Push                             |
-| Frontend   | TanStack Start, React 19, Tailwind v4, Kumo, Hugeicons        |
-| Tooling    | `cf` CLI, Vite, Vitest, pnpm                                  |
+| Layer      | What we use                                               |
+| ---------- | --------------------------------------------------------- |
+| Runtime    | Cloudflare Workers, Durable Objects (SQLite)              |
+| Agents     | `agents` SDK, `@cloudflare/think`, `@cloudflare/computer` |
+| Models     | Workers AI, or any provider through AI Gateway            |
+| Browser    | Browser Run: Chromium, Live View, Kitesurf                |
+| Sandboxing | Dynamic Workers (shell, scripts, bot-built app servers)   |
+| Inbound    | Email Routing, webhooks, Web Push                         |
+| Frontend   | TanStack Start, React 19, Tailwind v4, Kumo, Hugeicons    |
+| Tooling    | `cf` CLI, Vite, Vitest, pnpm                              |
 
 ## Run it locally
 
@@ -200,8 +220,14 @@ pnpm dev
 Then open http://localhost:3000.
 
 - **Why Wrangler login?** Workers AI and Browser Run can't run locally, so dev
-  calls your real account for those two. Everything else runs on disk under
-  `.cloudflare/state/`.
+  calls your real account for those two. Other bindings are simulated on disk
+  under `.cloudflare/state/` by default.
+- **Chat attachments:** the private `ATTACHMENTS` R2 bucket holds new uploads.
+  To use a real bucket from local dev, start with
+  `COWORKERS_ATTACHMENTS_BUCKET=<bucket> COWORKERS_REMOTE_ATTACHMENTS=1 pnpm dev`.
+  The bucket must already exist in the selected account. The installer and
+  `pnpm run setup` provision a private bucket for new deployments; CLI setup
+  also accepts `COWORKERS_ATTACHMENTS_BUCKET` to use an existing bucket.
 - **More than one account?** Prefix with `CLOUDFLARE_ACCOUNT_ID=<id>`.
 - **Secrets:** copy `.dev.vars.example` to `.dev.vars`. All of them are
   optional.
@@ -227,8 +253,15 @@ cf auth login
 pnpm run setup
 ```
 
-`scripts/setup.ts` asks for the account, a name, who can sign in and a model,
-then does what the installer does with the `cf` CLI:
+`scripts/setup.ts` asks for the account, a Worker name, an optional custom
+hostname, who can sign in, and a model. A custom hostname must be in an active
+Cloudflare zone in the selected account. Setup attaches it to the Worker,
+disables the `workers.dev` URL, and configures Access for the custom hostname.
+You can also pass the hostname as `COWORKERS_CUSTOM_DOMAIN=agents.example.com`.
+The sign-in list accepts both individual email addresses and whole email domains
+(e.g. `COWORKERS_ACCESS_ALLOW=example.com,person@example.net`).
+
+Setup then does what the installer does with the `cf` CLI:
 
 1. creates the AI Gateway and Web Push keys
 2. deploys once with Access required but not yet set up, so the new URL
@@ -327,19 +360,19 @@ Set in `cloudflare.config.ts`. Everything has a working default.
 `coworkers.deploy.json`, if present, overrides the name, `MODEL`,
 `AI_GATEWAY_ID` and the two `ACCESS_*` values.
 
-| Setting                  | What it does                                                          |
-| ------------------------ | --------------------------------------------------------------------- |
-| `MODEL`                  | Default chat model. `@cf/...` = Workers AI, `provider/model` = catalog |
-| `BACKGROUND_MODEL`       | Model for routines, check-ins and email. Empty = the chat model        |
-| `FALLBACK_MODEL`         | Workers AI model a turn retries on when a third-party model fails      |
-| `AI_GATEWAY_ID`          | Gateway for every model call. Empty = `default` (created on first use) |
-| `ACCESS_TEAM_DOMAIN`     | With `ACCESS_AUD`, require a valid Access token on every request       |
-| `ACCESS_AUD`             | The Access application's AUD tag                                       |
-| `QUICK_ACTION_ENGINE`    | `kitesurf` (cheaper) or `chromium` for quick page reads                |
-| `EMAIL_DOMAIN`           | Turns on inbound email. Each bot gets `<user>.<bot>@<domain>`         |
-| `BROWSER_RUN_ACCOUNT_ID` | With `BROWSER_RUN_API_TOKEN` (secret), turns on the crawl tool        |
+| Setting                  | What it does                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `MODEL`                  | Default chat model. `@cf/...` = Workers AI, `provider/model` = catalog                          |
+| `BACKGROUND_MODEL`       | Model for routines, check-ins and email. Empty = the chat model                                 |
+| `FALLBACK_MODEL`         | Workers AI model a turn retries on when a third-party model fails                               |
+| `AI_GATEWAY_ID`          | Gateway for every model call. Empty = `default` (created on first use)                          |
+| `ACCESS_TEAM_DOMAIN`     | With `ACCESS_AUD`, require a valid Access token on every request                                |
+| `ACCESS_AUD`             | The Access application's AUD tag                                                                |
+| `QUICK_ACTION_ENGINE`    | `kitesurf` (cheaper) or `chromium` for quick page reads                                         |
+| `EMAIL_DOMAIN`           | Turns on inbound email. Each bot gets `<user>.<bot>@<domain>`                                   |
+| `BROWSER_RUN_ACCOUNT_ID` | With `BROWSER_RUN_API_TOKEN` (secret), turns on the crawl tool                                  |
 | `AI_GATEWAY_API_TOKEN`   | Secret with "AI Gateway Read": per-bot spend in Settings. Uses `accountId` from the deploy file |
-| `VAPID_*`                | Push notification keys (`npx web-push generate-vapid-keys`)           |
+| `VAPID_*`                | Push notification keys (`npx web-push generate-vapid-keys`)                                     |
 
 The Models page overrides `MODEL` and `BACKGROUND_MODEL` for your account,
 and each bot can pick its own chat model in its settings.

@@ -10,8 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
-import { Route as DemoRouteImport } from './routes/demo'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppBoardRouteImport } from './routes/_app/board'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as ApiDemoProfileRouteImport } from './routes/api/demo-profile'
 import { Route as ApiHelloRouteImport } from './routes/api/hello'
@@ -27,14 +27,14 @@ const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DemoRoute = DemoRouteImport.update({
-  id: '/demo',
-  path: '/demo',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppBoardRoute = AppBoardRouteImport.update({
+  id: '/board',
+  path: '/board',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
@@ -91,7 +91,7 @@ const ApiHooksUserIdBotIdTokenRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
-  '/demo': typeof DemoRoute
+  '/board': typeof AppBoardRoute
   '/settings': typeof AppSettingsRoute
   '/api/demo-profile': typeof ApiDemoProfileRoute
   '/api/hello': typeof ApiHelloRoute
@@ -104,7 +104,7 @@ export interface FileRoutesByFullPath {
   '/api/hooks/$userId/$botId/$token': typeof ApiHooksUserIdBotIdTokenRoute
 }
 export interface FileRoutesByTo {
-  '/demo': typeof DemoRoute
+  '/board': typeof AppBoardRoute
   '/settings': typeof AppSettingsRoute
   '/api/demo-profile': typeof ApiDemoProfileRoute
   '/api/hello': typeof ApiHelloRoute
@@ -120,7 +120,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
-  '/demo': typeof DemoRoute
+  '/_app/board': typeof AppBoardRoute
   '/_app/settings': typeof AppSettingsRoute
   '/api/demo-profile': typeof ApiDemoProfileRoute
   '/api/hello': typeof ApiHelloRoute
@@ -137,7 +137,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/demo'
+    | '/board'
     | '/settings'
     | '/api/demo-profile'
     | '/api/hello'
@@ -150,7 +150,7 @@ export interface FileRouteTypes {
     | '/api/hooks/$userId/$botId/$token'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/demo'
+    | '/board'
     | '/settings'
     | '/api/demo-profile'
     | '/api/hello'
@@ -165,7 +165,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_app'
-    | '/demo'
+    | '/_app/board'
     | '/_app/settings'
     | '/api/demo-profile'
     | '/api/hello'
@@ -181,7 +181,6 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
-  DemoRoute: typeof DemoRoute
   ApiDemoProfileRoute: typeof ApiDemoProfileRoute
   ApiHelloRoute: typeof ApiHelloRoute
   ApiHooksUserIdBotIdTokenRoute: typeof ApiHooksUserIdBotIdTokenRoute
@@ -196,18 +195,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/demo': {
-      id: '/demo'
-      path: '/demo'
-      fullPath: '/demo'
-      preLoaderRoute: typeof DemoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_app/': {
       id: '/_app/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/board': {
+      id: '/_app/board'
+      path: '/board'
+      fullPath: '/board'
+      preLoaderRoute: typeof AppBoardRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings': {
@@ -300,6 +299,7 @@ const AppBotsBotIdRouteWithChildren = AppBotsBotIdRoute._addFileChildren(
 )
 
 interface AppRouteChildren {
+  AppBoardRoute: typeof AppBoardRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppBotsBotIdRoute: typeof AppBotsBotIdRouteWithChildren
@@ -308,6 +308,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppBoardRoute: AppBoardRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
   AppBotsBotIdRoute: AppBotsBotIdRouteWithChildren,
@@ -319,7 +320,6 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
-  DemoRoute: DemoRoute,
   ApiDemoProfileRoute: ApiDemoProfileRoute,
   ApiHelloRoute: ApiHelloRoute,
   ApiHooksUserIdBotIdTokenRoute: ApiHooksUserIdBotIdTokenRoute,

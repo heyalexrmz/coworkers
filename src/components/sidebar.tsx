@@ -13,7 +13,9 @@ import {
   BellIcon,
   BellRingingIcon,
   BellSlashIcon,
+  BoardIcon,
   BotIcon,
+  FileEditIcon,
   GearSixIcon,
   InboxIcon,
   MagnifyingGlassIcon,
@@ -22,15 +24,17 @@ import {
 } from "@/components/icons"
 import { ApprovalPopover } from "@/components/approval-popover"
 import { BotAvatar } from "@/components/bot-avatar"
+import { BotTeamDialog } from "@/components/bot-team-dialog"
 import { SettingsSidebar, rememberAppPath } from "@/components/settings-nav"
 import { EmptyState } from "@/components/empty-state"
 import { ShimmerText } from "@/components/shimmer-text"
 import { plainMentions } from "@/lib/bot-links"
+import { sidebarTeams } from "@/lib/bot-teams"
 import { useHub } from "@/lib/hub-context"
 import { usePushNotifications } from "@/lib/push"
 import { useIsPhone } from "@/lib/use-is-phone"
 import { useSwipeViews } from "@/lib/use-swipe-views"
-import type { BotSummary, Pipeline, PipelineRun } from "@/lib/types"
+import type { BotSummary, BotTeam, Pipeline, PipelineRun } from "@/lib/types"
 
 /** Bots large enough to earn the phone home's top row. */
 const FEATURED = 3
@@ -245,6 +249,32 @@ function DeskRow() {
   )
 }
 
+function BoardRow() {
+  const { state } = useHub()
+  const count = (state.board ?? []).filter(
+    (task) => task.status === "queued"
+  ).length
+  return (
+    <Link
+      to="/board"
+      className={`${ROW} hover:bg-(--fill-hover)`}
+      activeProps={{ className: "bg-(--fill-active)" }}
+    >
+      <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-(--fill-hover) text-kumo-default">
+        <BoardIcon size={22} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[15px] font-medium text-kumo-default">
+          Board
+        </span>
+        <span className="block truncate text-sm text-kumo-subtle">
+          {count ? `${count} queued` : "Team tasks"}
+        </span>
+      </span>
+    </Link>
+  )
+}
+
 /** A search pill with a round action button tucked in at the end. */
 function SearchPill({
   value,
@@ -317,19 +347,18 @@ function BotsView({ home }: { home: boolean }) {
   const [query, setQuery] = useState("")
   const [creating, setCreating] = useState(false)
 
-  const bots = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    if (!needle) return hub.state.bots
-    return hub.state.bots.filter(
-      (b) =>
-        b.name.toLowerCase().includes(needle) ||
-        b.preview.toLowerCase().includes(needle)
-    )
-  }, [hub.state.bots, query])
+  const [editor, setEditor] = useState<BotTeam | "new" | null>(null)
+  const { bots, teams } = hub.state
+  const { groups, ungrouped } = useMemo(
+    () => sidebarTeams({ bots, teams }, query),
+    [bots, teams, query]
+  )
 
-  // Only worth a strip when the list still has rows left under it.
+  // Once teams exist, keep phone rows with their teams instead of promoting them.
   const featured =
-    home && !query && bots.length > FEATURED ? bots.slice(0, FEATURED) : []
+    home && !query && !teams?.length && ungrouped.length > FEATURED
+      ? ungrouped.slice(0, FEATURED)
+      : []
 
   async function createBot() {
     setCreating(true)
@@ -367,21 +396,78 @@ function BotsView({ home }: { home: boolean }) {
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-(--inset) pt-1"
       >
         {featured.length ? <FeaturedBots bots={featured} /> : null}
-        {!query && hub.state.bots.length ? (
+        {!query ? (
           <>
-            <DeskRow />
+            {hub.state.bots.length ? <DeskRow /> : null}
+            <BoardRow />
             <div className="mx-2.5 my-1 h-px bg-kumo-line" />
           </>
         ) : null}
-        {bots.slice(featured.length).map((bot) => (
+        {!query ? (
+          <div className="flex min-h-9 items-center justify-between px-2.5">
+            <span className="text-xs font-medium text-kumo-subtle">Teams</span>
+            <button
+              type="button"
+              disabled={!hub.live}
+              onClick={() => setEditor("new")}
+              className="pressable flex min-h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-kumo-default outline-none hover:bg-(--fill-hover) focus-visible:ring-2 focus-visible:ring-kumo-focus disabled:opacity-50"
+            >
+              <PlusIcon aria-hidden="true" size={13} /> New team
+            </button>
+          </div>
+        ) : null}
+        {groups.map(({ team, bots }) => (
+          <section
+            key={team.id}
+            aria-label={`${team.name} team`}
+            className="mt-1"
+          >
+            <div className="flex min-h-8 items-center justify-between gap-2 px-2.5">
+              <h2 className="min-w-0 truncate text-xs font-semibold text-kumo-default">
+                {team.name}
+              </h2>
+              <button
+                type="button"
+                aria-label={`Edit ${team.name} team`}
+                disabled={!hub.live}
+                onClick={() => setEditor(team)}
+                className="icon-btn size-7! shrink-0"
+              >
+                <FileEditIcon size={14} />
+              </button>
+            </div>
+            <div className="ml-2 border-l border-kumo-line pl-1.5">
+              {bots.map((bot) => (
+                <BotRow key={bot.id} bot={bot} active={bot.id === botId} />
+              ))}
+              {!bots.length ? (
+                <p className="px-2.5 py-2 text-xs text-kumo-subtle">
+                  No agents yet
+                </p>
+              ) : null}
+            </div>
+          </section>
+        ))}
+        {teams?.length && ungrouped.length ? (
+          <h2 className="mt-2 px-2.5 py-1.5 text-xs font-semibold text-kumo-subtle">
+            Ungrouped
+          </h2>
+        ) : null}
+        {ungrouped.slice(featured.length).map((bot) => (
           <BotRow key={bot.id} bot={bot} active={bot.id === botId} />
         ))}
-        {bots.length === 0 ? (
+        {groups.length === 0 && ungrouped.length === 0 ? (
           <p className="px-2.5 py-6 text-sm text-kumo-subtle">
-            {query ? "No bots match that search." : "No bots yet."}
+            {query ? "No teams or bots match that search." : "No bots yet."}
           </p>
         ) : null}
       </nav>
+      {editor ? (
+        <BotTeamDialog
+          team={editor === "new" ? undefined : editor}
+          onClose={() => setEditor(null)}
+        />
+      ) : null}
     </>
   )
 }

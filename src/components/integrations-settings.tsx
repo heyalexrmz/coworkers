@@ -23,14 +23,15 @@ import {
 } from "@/components/icons"
 import { ShimmerText } from "@/components/shimmer-text"
 import { SignInButton } from "@/components/sign-in-button"
-import { sameEndpoint } from "@/lib/choices"
 import { connectionStatus } from "@/lib/connection-status"
 import { useHub } from "@/lib/hub-context"
 import {
   INTEGRATIONS,
   INTEGRATION_CATEGORIES,
+  integrationEndpoint,
   integrationFor,
   integrationHeaders,
+  integrationMatches,
 } from "@/lib/integrations"
 import type { Integration, IntegrationCategory } from "@/lib/integrations"
 import type { Connection, ConnectionTool } from "@/lib/types"
@@ -66,7 +67,9 @@ function useItems(): Item[] {
     const items: Item[] = INTEGRATIONS.map((integration) => ({
       key: integration.id,
       integration,
-      connection: connections.find((c) => sameEndpoint(c.url, integration.url)),
+      connection: connections.find((c) =>
+        integrationMatches(integration, c.url)
+      ),
     }))
     for (const connection of connections) {
       if (!integrationFor(connection.url)) {
@@ -630,7 +633,7 @@ function AppPage({
     try {
       await hub.addConnection({
         name: integration.name,
-        url: integration.url,
+        url: integrationEndpoint(integration, key),
         headers: integrationHeaders(integration, key),
       })
       setKey("")
@@ -745,7 +748,9 @@ function AppPage({
             <p className="px-1.5 text-xs text-pretty text-kumo-subtle">
               {needsKey
                 ? "Sent with every request from the server. Bots never see it. "
-                : "Works without one at lower rate limits. Add yours to lift them. "}
+                : integration.auth === "oauth"
+                  ? "Leave blank to sign in, or use your API key instead. "
+                  : "Works without one at lower rate limits. Add yours to lift them. "}
               <a
                 href={integration.key.getKey}
                 target="_blank"
@@ -1051,7 +1056,7 @@ export function IntegrationsSettings({
 
   const integration = INTEGRATIONS.find((i) => i.id === app)
   const connection = integration
-    ? hub.state.connections.find((c) => sameEndpoint(c.url, integration.url))
+    ? hub.state.connections.find((c) => integrationMatches(integration, c.url))
     : hub.state.connections.find((c) => app === customId(c))
 
   return (

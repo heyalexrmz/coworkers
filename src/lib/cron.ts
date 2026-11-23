@@ -100,14 +100,18 @@ function single(field: Field) {
   return field.values.size === 1 ? [...field.values][0] : null
 }
 
-function localTime(hourUtc: number, minute: number) {
+function localTime(hourUtc: number, minute: number, timeZone?: string) {
   const d = new Date()
   d.setUTCHours(hourUtc, minute, 0, 0)
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+  return d.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+  })
 }
 
 /** "Every 10 minutes", "Weekdays at 8:00 AM", or null when it is unusual. */
-export function describeCron(cron: Cron): string | null {
+export function describeCron(cron: Cron, timeZone?: string): string | null {
   const [m, h, dom, mon, dow] = cron.raw
   const everyDay = dom === "*" && mon === "*"
   if (!everyDay) return null
@@ -129,7 +133,7 @@ export function describeCron(cron: Cron): string | null {
   const minute = single(cron.minute)
   if (minute === null || cron.hour.any || cron.hour.values.size > 3) return null
   const times = [...cron.hour.values]
-    .map((hour) => localTime(hour, minute))
+    .map((hour) => localTime(hour, minute, timeZone))
     .join(", ")
 
   const days = [...cron.dow.values].sort()
@@ -139,5 +143,5 @@ export function describeCron(cron: Cron): string | null {
   else if (days.join() === "0,6") when = "Weekends"
   else if (days.length === 1) when = `Every ${DAYS[days[0]]}`
   else when = days.map((d) => DAYS[d].slice(0, 3)).join(", ")
-  return `${when} at ${times}`
+  return `${when} at ${times}${timeZone === "UTC" ? " UTC" : ""}`
 }

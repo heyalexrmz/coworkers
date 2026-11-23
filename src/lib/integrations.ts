@@ -10,14 +10,16 @@ import { sameEndpoint } from "@/lib/choices"
  * without changing its shape.
  */
 
-export type IntegrationCategory =
-  "Search and web" | "Productivity" | "Developer tools"
-
-export const INTEGRATION_CATEGORIES: IntegrationCategory[] = [
+export const INTEGRATION_CATEGORIES = [
   "Search and web",
   "Productivity",
+  "Meetings",
+  "Design",
+  "Finance",
   "Developer tools",
-]
+] as const
+
+export type IntegrationCategory = (typeof INTEGRATION_CATEGORIES)[number]
 
 export interface Integration {
   /** Stable slug, e.g. "firecrawl". */
@@ -44,6 +46,8 @@ export interface Integration {
   /** For "key", or an optional key that lifts a free tier's limits. */
   key?: {
     header: string
+    /** Alternate endpoint when using a key instead of OAuth. */
+    url?: string
     /** Put before the key, e.g. "Bearer ". */
     prefix?: string
     /** Where the user creates a key. */
@@ -70,13 +74,18 @@ export const INTEGRATIONS: Integration[] = [
   {
     id: "exa",
     name: "Exa",
-    description: "Search the web and fetch pages. Free at lower rate limits.",
+    description: "Search the web and fetch pages with your Exa account.",
     category: "Search and web",
     site: "exa.ai",
     docs: "https://docs.exa.ai/reference/exa-mcp",
-    url: "https://mcp.exa.ai/mcp",
-    auth: "none",
-    key: { header: "x-api-key", getKey: "https://dashboard.exa.ai/api-keys" },
+    // Exa rejects keyless requests from proxied networks, including Workers.
+    url: "https://mcp.exa.ai/mcp?login",
+    auth: "oauth",
+    key: {
+      header: "x-api-key",
+      url: "https://mcp.exa.ai/mcp",
+      getKey: "https://dashboard.exa.ai/api-keys",
+    },
   },
   {
     id: "firecrawl",
@@ -129,6 +138,59 @@ export const INTEGRATIONS: Integration[] = [
     auth: "oauth",
   },
   {
+    id: "circleback",
+    name: "Circleback",
+    description: "Find meetings, transcripts, and action items.",
+    category: "Meetings",
+    site: "circleback.ai",
+    docs: "https://circleback.ai/docs/support/platform/circleback-mcp",
+    url: "https://circleback.ai/api/mcp",
+    auth: "oauth",
+  },
+  {
+    id: "granola",
+    name: "Granola",
+    description:
+      "Search meeting notes and decisions. Transcripts require a paid plan.",
+    category: "Meetings",
+    site: "granola.ai",
+    docs: "https://docs.granola.ai/help-center/sharing/integrations/mcp",
+    url: "https://mcp.granola.ai/mcp",
+    auth: "oauth",
+  },
+  {
+    id: "paper",
+    name: "Paper",
+    description:
+      "Inspect and edit designs, read styles, and capture screenshots.",
+    category: "Design",
+    site: "paper.design",
+    docs: "https://paper.design/docs/mcp",
+    url: "https://mcp.paper.design",
+    auth: "oauth",
+  },
+  {
+    id: "canva",
+    name: "Canva",
+    description: "Find, create, and edit designs in your Canva account.",
+    category: "Design",
+    site: "canva.com",
+    docs: "https://www.canva.com/help/mcp-agent-setup/",
+    url: "https://mcp.canva.com/mcp",
+    auth: "oauth",
+  },
+  {
+    id: "stripe",
+    name: "Stripe",
+    description:
+      "Look up customers, invoices, and payments. Start with a sandbox.",
+    category: "Finance",
+    site: "stripe.com",
+    docs: "https://docs.stripe.com/mcp",
+    url: "https://mcp.stripe.com",
+    auth: "oauth",
+  },
+  {
     id: "sentry",
     name: "Sentry",
     description: "Look up issues, errors and releases.",
@@ -163,7 +225,19 @@ export const INTEGRATIONS: Integration[] = [
 
 /** The catalog entry a connection was made from, matched by endpoint. */
 export function integrationFor(url: string): Integration | undefined {
-  return INTEGRATIONS.find((i) => sameEndpoint(i.url, url))
+  return INTEGRATIONS.find((i) => integrationMatches(i, url))
+}
+
+export function integrationMatches(integration: Integration, url: string) {
+  return (
+    sameEndpoint(integration.url, url) ||
+    (integration.key?.url !== undefined &&
+      sameEndpoint(integration.key.url, url))
+  )
+}
+
+export function integrationEndpoint(integration: Integration, key: string) {
+  return (key.trim() && integration.key?.url) || integration.url
 }
 
 /** The header that carries a user's key for an integration. */

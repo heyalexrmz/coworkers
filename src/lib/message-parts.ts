@@ -28,7 +28,13 @@ export type Block =
   | { kind: "show"; key: string; call: ToolCall }
   | { kind: "skill"; key: string; call: ToolCall }
   | { kind: "capture"; key: string; call: ToolCall; capture: Capture }
-  | { kind: "routine"; key: string; routine: Routine; updated: boolean }
+  | {
+      kind: "routine"
+      key: string
+      routine: Routine
+      updated: boolean
+      nextRunAt?: number
+    }
   | { kind: "shop-results"; key: string; call: ToolCall }
   | { kind: "shop-checkout"; key: string; call: ToolCall }
 
@@ -314,6 +320,7 @@ export function toBlocks(message: UIMessage): Block[] {
           key,
           routine,
           updated: call.name === "update_routine",
+          nextRunAt: (call.output as { nextRunAt?: number }).nextRunAt,
         })
         return
       }
@@ -428,6 +435,8 @@ export function describeCall(call: ToolCall): string {
     }
     case "delegate_task":
       return `Gave ${str("to")} a task`
+    case "board_create_task":
+      return "Added a task to Board"
     case "attach_result_files":
       return "Attached files to the result"
     case "read_skill_resource":

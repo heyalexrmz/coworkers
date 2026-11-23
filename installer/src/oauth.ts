@@ -25,6 +25,8 @@ export const SCOPES = [
   // Create and upload the Worker, its assets and the workers.dev route.
   // Admin, because Editor cannot create a Worker that does not exist yet.
   "workers-scripts.admin",
+  // Create the private chat attachment bucket.
+  "workers-r2.write",
   // Attach a custom domain on one of their zones.
   "workers-routes.write",
   // Pick a zone for a custom domain.

@@ -5,7 +5,11 @@ import { CaretRightIcon } from "@/components/icons"
 import { IntegrationsSettings } from "@/components/integrations-settings"
 import { ModelsSettings } from "@/components/models-settings"
 import { SidebarToggle } from "@/components/page-header"
-import { SETTINGS_SECTIONS, isSettingsSection } from "@/components/settings-nav"
+import {
+  SETTINGS_SECTIONS,
+  SettingsSignOut,
+  isSettingsSection,
+} from "@/components/settings-nav"
 import type { SettingsSection } from "@/components/settings-nav"
 import { SkillsSettings } from "@/components/skills-settings"
 import { SpendSettings } from "@/components/spend-settings"
@@ -98,6 +102,8 @@ function Settings() {
               ))}
             </ul>
           )}
+
+          {picked ? null : <SettingsSignOut className="mt-4 md:hidden" />}
 
           <div className={picked ? undefined : "max-md:hidden"}>
             {current.value === "models" ? (

@@ -2,6 +2,8 @@
 export type ApiBinding =
   | { type: "ai" | "browser" | "worker_loader"; name: string }
   | { type: "durable_object_namespace"; name: string; class_name: string }
+  | { type: "r2_bucket"; name: string; bucket_name: string }
+  | { type: "send_email"; name: string }
   | { type: "plain_text" | "secret_text"; name: string; text: string }
 
 /** Written by scripts/pack-release.ts into public/release/manifest.json. */

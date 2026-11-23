@@ -4,9 +4,11 @@ import {
   ArrowLeftIcon,
   BookOpenTextIcon,
   CoinsIcon,
+  LogoutIcon,
   PlugsConnectedIcon,
   TerminalIcon,
 } from "@/components/icons"
+import { useHub } from "@/lib/hub-context"
 
 export const SETTINGS_SECTIONS = [
   {
@@ -56,6 +58,33 @@ export function sectionSearch(value: SettingsSection) {
 let lastAppPath = "/"
 export function rememberAppPath(path: string) {
   if (!path.startsWith("/settings")) lastAppPath = path
+}
+
+export function SettingsSignOut({ className = "" }: { className?: string }) {
+  const { viewer } = useHub()
+  if (!viewer.email) return null
+
+  return (
+    <div className={className}>
+      {/* This must navigate to Cloudflare, not through the client router. */}
+      <a
+        href="/cdn-cgi/access/logout"
+        className="pressable flex min-h-11 items-center gap-3 rounded-xl px-2.5 py-2 text-sm text-kumo-default outline-none hover:bg-(--fill-hover) focus-visible:ring-2 focus-visible:ring-kumo-focus"
+      >
+        <LogoutIcon
+          aria-hidden="true"
+          size={18}
+          className="shrink-0 text-kumo-subtle"
+        />
+        <span className="min-w-0">
+          <span className="block">Sign out</span>
+          <span className="block truncate text-xs text-kumo-subtle">
+            {viewer.email}
+          </span>
+        </span>
+      </a>
+    </div>
+  )
 }
 
 /**
@@ -116,6 +145,7 @@ export function SettingsSidebar() {
             )
           })}
         </ul>
+        <SettingsSignOut className="mt-auto pt-4 pb-2" />
       </nav>
     </>
   )

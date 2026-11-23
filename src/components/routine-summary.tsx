@@ -20,13 +20,21 @@ function moment(at: number) {
   return `${day}, ${time}`
 }
 
-function when(routine: Routine, hydrated: boolean) {
+function when(routine: Routine, hydrated: boolean, scheduledAt?: number) {
   // Schedules read in the viewer's zone, so only after hydration.
   if (!hydrated) return routine.kind === "once" ? "Once" : "Repeats"
-  if (routine.kind === "once") return moment(new Date(routine.when).getTime())
+  if (routine.kind === "once")
+    return moment(scheduledAt ?? new Date(routine.when).getTime())
   const cron = parseCron(routine.when)
-  const label = (cron && describeCron(cron)) ?? `Cron ${routine.when}`
-  const next = cron ? nextRun(cron, Date.now()) : null
+  const label =
+    (cron && describeCron(cron, "UTC")) ?? `Cron ${routine.when} (UTC)`
+  const now = Date.now()
+  const next =
+    scheduledAt && scheduledAt >= now
+      ? scheduledAt
+      : cron
+        ? nextRun(cron, now)
+        : null
   return next ? `${label} · next ${moment(next)}` : label
 }
 
@@ -34,14 +42,19 @@ function when(routine: Routine, hydrated: boolean) {
 export function RoutineSummary({
   routine,
   updated,
+  nextRunAt,
   botId,
 }: {
   routine: Routine
   updated: boolean
+  nextRunAt?: number
   botId?: string
 }) {
   const hydrated = useHydrated()
-  const schedule = useMemo(() => when(routine, hydrated), [routine, hydrated])
+  const schedule = useMemo(
+    () => when(routine, hydrated, nextRunAt),
+    [routine, hydrated, nextRunAt]
+  )
   return (
     <div className="flex w-full max-w-[640px] items-center gap-3 rounded-3xl bg-kumo-tint p-3 pr-4">
       <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-kumo-base text-kumo-subtle outline outline-1 -outline-offset-1 outline-black/[0.06]">

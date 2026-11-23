@@ -199,6 +199,26 @@ export class CfApi {
     )
   }
 
+  async ensureR2Bucket(accountId: string, name: string) {
+    const path = `/accounts/${accountId}/r2/buckets`
+    const exists = async () => {
+      try {
+        await this.request("GET", `${path}/${encodeURIComponent(name)}`)
+        return true
+      } catch (error) {
+        if (error instanceof CfApiError && error.status === 404) return false
+        throw error
+      }
+    }
+    if (await exists()) return
+    try {
+      await this.request("POST", path, { json: { name } })
+    } catch (error) {
+      // A parallel retry may have created it after the GET.
+      if (!(await exists().catch(() => false))) throw error
+    }
+  }
+
   putScript(accountId: string, name: string, form: FormData) {
     return this.request<{ id: string }>(
       "PUT",

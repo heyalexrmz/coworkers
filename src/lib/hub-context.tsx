@@ -2,9 +2,11 @@ import { createContext, useContext, useEffect, useMemo } from "react"
 import { useAgent } from "agents/react"
 import { setBotFetcher, syncBotSummaries } from "@/lib/bot-cache"
 import type { ReactNode } from "react"
+import type { BoardDraft, BoardEdit } from "@/lib/board"
 import type { UIMessage } from "ai"
 import type {
   BotSummary,
+  BotTeamInput,
   Connection,
   ConnectionTool,
   HubState,
@@ -40,6 +42,8 @@ interface HubContextValue {
   live: boolean
   createBot: () => Promise<BotSummary>
   deleteBot: (botId: string) => Promise<void>
+  saveBotTeam: (input: BotTeamInput) => Promise<void>
+  deleteBotTeam: (id: string) => Promise<void>
   /** A bot that sets up and runs the others (onboarding). */
   createChiefOfStaff: () => Promise<BotSummary>
   /** Paused bots skip routines, check-ins, email, webhooks and bot messages. */
@@ -82,6 +86,11 @@ interface HubContextValue {
   refreshSpend: (() => Promise<void>) | null
   /** The Desk's cards. Null until the hub WebSocket is up. */
   desk: DeskApi | null
+  board: {
+    create: (input: BoardDraft) => Promise<{ id: string }>
+    edit: (input: BoardEdit) => Promise<void>
+    archive: (id: string, updatedAt: number) => Promise<void>
+  } | null
   /**
    * Shop, for cards that fetch on their own. Null until the hub WebSocket
    * is up; stable while it stays up, so effects can depend on it.
@@ -184,6 +193,8 @@ export function StaticHubProvider({
       live: false,
       createBot: notConnected,
       deleteBot: notConnected,
+      saveBotTeam: notConnected,
+      deleteBotTeam: notConnected,
       createChiefOfStaff: notConnected,
       setPaused: notConnected,
       markRead: () => {},
@@ -206,6 +217,7 @@ export function StaticHubProvider({
       pipelines: null,
       refreshSpend: null,
       desk: null,
+      board: null,
       shop: null,
     }),
     [viewer, initial]
@@ -259,6 +271,8 @@ export function LiveHubProvider({ viewer, initial, children }: ProviderProps) {
       live: agent.state !== undefined,
       createBot: () => agent.stub.createBot(),
       deleteBot: (botId) => agent.stub.deleteBot(botId),
+      saveBotTeam: (input) => agent.stub.saveBotTeam(input),
+      deleteBotTeam: (id) => agent.stub.deleteBotTeam(id),
       createChiefOfStaff: () => agent.stub.createChiefOfStaff(),
       setPaused: (botId, paused) =>
         paused ? agent.stub.pauseBot(botId) : agent.stub.resumeBot(botId),
@@ -335,9 +349,17 @@ export function LiveHubProvider({ viewer, initial, children }: ProviderProps) {
               markSeen: () => void agent.stub.markDeskSeen(),
             }
           : null,
+      board: live
+        ? {
+            create: (input) => agent.stub.createBoardTask(input),
+            edit: (input) => agent.stub.editBoardTask(input),
+            archive: (id, updatedAt) =>
+              agent.stub.archiveBoardTask(id, updatedAt),
+          }
+        : null,
       shop,
     }),
-    [viewer, state, agent, shop]
+    [viewer, state, agent, shop, live]
   )
   return <HubContext.Provider value={value}>{children}</HubContext.Provider>
 }

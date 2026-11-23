@@ -108,7 +108,7 @@ function Identity() {
     <div className="space-y-2">
       <Group
         title="Identity"
-        hint="The job is what this bot is for. It sees it on every turn."
+        hint="Your agent uses these instructions in every conversation."
       >
         <Row label="Name">
           <input
@@ -127,7 +127,7 @@ function Identity() {
             id="bot-job"
             value={role}
             onChange={(e) => setRole(e.target.value)}
-            placeholder="Overnight pipeline generation and outbound. Draft in my voice, never send without asking."
+            placeholder="Describe what this agent should do and how it should work."
             className={`${FIELD} mt-1.5 field-sizing-content min-h-16 resize-none leading-6 text-pretty`}
           />
         </li>

@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react"
-import { useHydrated, useLocation } from "@tanstack/react-router"
+import { Link, useHydrated, useLocation } from "@tanstack/react-router"
 import Markdown, { defaultUrlTransform } from "react-markdown"
 import type { Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -19,6 +19,8 @@ import {
   ClockIcon,
   CrawlIcon,
   EnvelopeSimpleIcon,
+  FileIcon,
+  FilePdfIcon,
   PipelineIcon,
   PlugsConnectedIcon,
   TerminalIcon,
@@ -28,7 +30,7 @@ import {
 import { AppIcon } from "@/components/app-icon"
 import { BotAvatar } from "@/components/bot-avatar"
 import { BotMention } from "@/components/bot-mention"
-import { CaptureCard } from "@/components/capture-card"
+import { CaptureCard, useFileData } from "@/components/capture-card"
 import { ArgsView, PreviewView } from "@/components/call-preview"
 import { CodeBlock } from "@/components/code-block"
 import { SkillInstall } from "@/components/skill-install"
@@ -51,6 +53,7 @@ import {
   toTurn,
 } from "@/lib/message-parts"
 import { useFollowBottom } from "@/lib/follow-bottom"
+import { splitAttachments } from "@/lib/attachments"
 import { approvalLabels, isEmptyPreview, previewOf } from "@/lib/call-preview"
 import { botIdFromLink, splitMentions } from "@/lib/bot-links"
 import { choiceKey, choiceOptions, sameEndpoint } from "@/lib/choices"
@@ -825,6 +828,7 @@ function AssistantMessage({
             key={block.key}
             routine={block.routine}
             updated={block.updated}
+            nextRunAt={block.nextRunAt}
             botId={botId}
           />
         )
@@ -900,7 +904,96 @@ function AssistantMessage({
   }
 }
 
-function UserMessage({ message }: { message: UIMessage }) {
+function UserAttachment({
+  path,
+  readFile,
+}: {
+  path: string
+  readFile?: ReadFileData
+}) {
+  const name = path.slice(path.lastIndexOf("/") + 1)
+  const ext = name.split(".").pop()?.toLowerCase() ?? ""
+  const image = ["png", "jpg", "jpeg", "gif", "webp", "bmp"].includes(ext)
+  const previewable = image || ext === "pdf"
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState(false)
+
+  async function download() {
+    if (!readFile || downloading) return
+    setDownloadError(false)
+    setDownloading(true)
+    try {
+      const { base64 } = await readFile(path)
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes]))
+      const link = document.createElement("a")
+      link.href = url
+      link.download = name
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch {
+      setDownloadError(true)
+    } finally {
+      setDownloading(false)
+    }
+  }
+  const { url, error } = useFileData(previewable ? readFile : undefined, path)
+  const Icon = ext === "pdf" ? FilePdfIcon : FileIcon
+  const content = (
+    <>
+      {image && url ? (
+        <img
+          src={url}
+          alt={name}
+          className="max-h-48 max-w-full rounded-lg object-contain"
+        />
+      ) : (
+        <Icon size={22} className="shrink-0" />
+      )}
+      <span className="min-w-0">
+        <span className="block truncate font-medium">{name}</span>
+        <span className="block text-xs opacity-70">
+          {downloadError
+            ? "Download failed · Retry"
+            : downloading
+              ? "Downloading…"
+              : error
+                ? "Preview unavailable"
+                : url
+                  ? "Open attachment"
+                  : ext.toUpperCase() || "File"}
+        </span>
+      </span>
+    </>
+  )
+  const className =
+    "flex max-w-full items-center gap-3 rounded-xl bg-white/15 px-3 py-2 text-left text-sm"
+  return url ? (
+    <a href={url} target="_blank" rel="noreferrer" className={className}>
+      {content}
+    </a>
+  ) : !previewable && readFile && path.startsWith("attachment://") ? (
+    <button
+      type="button"
+      className={className}
+      onClick={() => void download()}
+      disabled={downloading}
+      aria-label={`Download ${name}`}
+    >
+      {content}
+    </button>
+  ) : (
+    <div className={className}>{content}</div>
+  )
+}
+
+function UserMessage({
+  message,
+  readFile,
+}: {
+  message: UIMessage
+  readFile?: ReadFileData
+}) {
   const origin = originOf(message)
   const text = messageText(message)
 
@@ -945,6 +1038,24 @@ function UserMessage({ message }: { message: UIMessage }) {
           <Prose text={stripOriginHeader(text)} />
         </div>
       </>
+    )
+  }
+  if (origin?.kind === "board") {
+    const replyTo = metaOf(message).task?.replyTo
+    return (
+      <SystemEvent>
+        {replyTo?.kind === "board" ? (
+          <Link
+            to="/board"
+            hash={`card-${replyTo.cardId}`}
+            className="font-medium text-kumo-default hover:underline"
+          >
+            Board · {origin.name}
+          </Link>
+        ) : (
+          <>Board · {origin.name}</>
+        )}
+      </SystemEvent>
     )
   }
   if (origin?.kind === "pipeline") {
@@ -996,15 +1107,25 @@ function UserMessage({ message }: { message: UIMessage }) {
   if (origin?.kind === "settings") {
     return <SystemEvent>{origin.name}</SystemEvent>
   }
+  const attachmentMessage = splitAttachments(text)
   return (
-    <div className="ml-auto w-fit max-w-[75%] rounded-[22px] bg-kumo-contrast px-[18px] py-3 text-[15px] leading-[1.65] text-pretty whitespace-pre-wrap text-kumo-inverse">
-      {splitMentions(text).map((segment, i) =>
+    <div className="ml-auto w-fit max-w-[85%] rounded-[22px] bg-kumo-contrast px-[18px] py-3 text-[15px] leading-[1.65] text-pretty whitespace-pre-wrap text-kumo-inverse">
+      {splitMentions(attachmentMessage.text).map((segment, i) =>
         segment.kind === "bot" ? (
           <BotMention key={i} botId={segment.botId} label={segment.label} />
         ) : (
           <Fragment key={i}>{segment.text}</Fragment>
         )
       )}
+      {attachmentMessage.paths.length > 0 ? (
+        <div
+          className={`flex flex-col gap-2 ${attachmentMessage.text ? "mt-3" : ""}`}
+        >
+          {attachmentMessage.paths.map((path) => (
+            <UserAttachment key={path} path={path} readFile={readFile} />
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1252,7 +1373,7 @@ export function Thread({
                 <TimeDivider at={at} />
               ) : null}
               {message.role === "user" ? (
-                <UserMessage message={message} />
+                <UserMessage message={message} readFile={readFile} />
               ) : (
                 <AssistantMessage
                   blocks={blocks}

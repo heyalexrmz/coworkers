@@ -293,6 +293,18 @@ export class Installer extends Agent<Env, InstallerState> {
       case "upload": {
         const release = await loadRelease(this.env.ASSETS)
         const target = { accountId: plan.accountId, name: plan.name }
+        const attachmentsBucket = release.worker.bindings.some(
+          (binding) =>
+            binding.type === "r2_bucket" && binding.name === "ATTACHMENTS"
+        )
+          ? `${plan.name.slice(0, 51)}-attachments`
+          : undefined
+        if (attachmentsBucket) {
+          this.patchStep("upload", {
+            detail: "Preparing private attachment storage",
+          })
+          await api.ensureR2Bucket(plan.accountId, attachmentsBucket)
+        }
         const assetsJwt = await uploadAssets(
           api,
           this.env.ASSETS,
@@ -324,6 +336,7 @@ export class Installer extends Agent<Env, InstallerState> {
             ACCESS_AUD: progress.aud ?? "",
           },
           secrets,
+          attachmentsBucket,
           assetsJwt,
           fresh: progress.fresh ?? true,
           ...(progress.migrationTag

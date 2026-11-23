@@ -15,10 +15,12 @@ const deploy: Partial<{
   name: string
   model: string
   gateway: string
+  customDomain: string
   accessTeamDomain: string
   accessAud: string
   emailDomain: string
   emailZoneId: string
+  attachmentsBucket: string
 }> =
   // The installer packs a release for everyone: never with your values.
   !process.env.COWORKERS_PACKING && DEPLOY_FILE
@@ -26,6 +28,9 @@ const deploy: Partial<{
     : {}
 
 const WORKER_NAME = deploy.name ?? "coworkers"
+const attachmentsOverride = !process.env.COWORKERS_PACKING
+  ? process.env.COWORKERS_ATTACHMENTS_BUCKET
+  : undefined
 
 /**
  * Cloudflare project config, read by the `cf` CLI and the Cloudflare Vite
@@ -55,6 +60,9 @@ export default defineConfig({
     },
     // Per-version preview hostnames are not covered by the Access app.
     previewUrls: false,
+    ...(deploy.customDomain
+      ? { domains: [deploy.customDomain], workersDev: false }
+      : {}),
     exports: {
       // One per user: bot directory, connections, cross-bot routing.
       UserHub: exports.durableObject({ storage: "sqlite" }),
@@ -69,6 +77,18 @@ export default defineConfig({
       EmailDirectory: exports.durableObject({ storage: "sqlite" }),
     },
     env: {
+      // Private chat uploads. Dev simulates R2 unless explicitly pointed at the real bucket.
+      ATTACHMENTS: bindings.r2({
+        name:
+          attachmentsOverride ??
+          deploy.attachmentsBucket ??
+          `${WORKER_NAME.slice(0, 51)}-attachments`,
+        dev: {
+          remote:
+            !process.env.COWORKERS_PACKING &&
+            process.env.COWORKERS_REMOTE_ATTACHMENTS === "1",
+        },
+      }),
       // Workers AI + AI Gateway for all model traffic. Neither this nor
       // Browser Run has a local simulator, so dev proxies to the account.
       AI: bindings.ai({ dev: { remote: true } }),

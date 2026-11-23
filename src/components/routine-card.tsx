@@ -187,10 +187,9 @@ export function RoutineCard({
       ? new Date(routine.when).getTime()
       : (runs[0] ?? (cron ? nextRun(cron, now) : null))
 
+  const cronLabel = cron && describeCron(cron, "UTC")
   const schedule =
-    routine.kind === "once"
-      ? "Once"
-      : ((cron && describeCron(cron)) ?? "Custom schedule")
+    routine.kind === "once" ? "Once" : cronLabel || "Custom UTC schedule"
 
   return (
     <li className="border-t border-kumo-line px-4 py-4 first:border-t-0">
@@ -225,7 +224,7 @@ export function RoutineCard({
           </div>
           <p className="mt-0.5 text-xs text-kumo-subtle tabular-nums">
             <span className="text-kumo-default">{schedule}</span>
-            {routine.kind === "cron" && !describeCron(cron!) ? (
+            {routine.kind === "cron" && !cronLabel ? (
               <span className="font-mono"> ({routine.when})</span>
             ) : null}
             {hydrated && next !== null && next >= now ? (

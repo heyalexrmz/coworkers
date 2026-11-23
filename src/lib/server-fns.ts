@@ -12,6 +12,7 @@ import type { UserHub } from "@/agents/user-hub"
 export interface Viewer {
   id: string
   label: string
+  email?: string
   avatarUrl?: string
 }
 
@@ -24,11 +25,12 @@ const DEMO_VIEWER = {
 
 async function viewerFromRequest(request: Request): Promise<Viewer> {
   const { id, email } = await identify(request)
+  if (email) return { id, label: email, email }
   if (id === DEMO_USER_ID) return { id, ...DEMO_VIEWER }
   if (id in DEMO_PROFILES) {
     return { id, label: DEMO_PROFILES[id as keyof typeof DEMO_PROFILES].label }
   }
-  return { id, label: email ?? id }
+  return { id, label: id }
 }
 
 /**

@@ -1,4 +1,9 @@
+import { botTeamInput, removeTeam, saveTeam } from "@/lib/bot-teams"
 import { sameEndpoint } from "@/lib/choices"
+import { boardDraftSchema, boardEditSchema } from "@/lib/board"
+import type { BoardDraft, BoardEdit } from "@/lib/board"
+import { BoardStore } from "./board-store"
+import { callWithMcpReconnect } from "./mcp-tool-result"
 import { Agent, callable, getAgentByName } from "agents"
 import {
   Client as McpClient,
@@ -136,6 +141,8 @@ const CHECKOUT_RECHECK_MS = 15_000
 
 /** How often new AI Gateway logs are read for the Spend page. */
 const SPEND_SYNC_S = 30 * 60
+const BOARD_HEARTBEAT_S = 60
+const BOARD_TIMEOUT_MS = 60 * 60_000
 /** Pages of 50 logs one sync reads before leaving the rest for the next. */
 const SPEND_MAX_PAGES = 40
 /** Daily spend rows older than this are dropped. */
@@ -161,6 +168,14 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
   }
 
   #skills?: SkillStore
+  #mcpReconnects = new Map<string, Promise<string>>()
+  #board?: BoardStore
+  #boardHeartbeat?: Promise<void>
+  #boardRunning = false
+
+  private get board() {
+    return (this.#board ??= new BoardStore(this.ctx.storage.sql))
+  }
   /**
    * Bots still being set up. A new bot opens before its setup is done, so
    * anything that calls one waits for it first.
@@ -176,6 +191,7 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
 
   async onStart() {
     this.skills.init()
+    this.board.init()
     // Push endpoints are capability URLs: keep them out of broadcast state.
     this.sql`CREATE TABLE IF NOT EXISTS push_subscriptions (
       endpoint TEXT PRIMARY KEY,
@@ -232,6 +248,7 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
       ...this.state,
       pipelines: this.state.pipelines ?? [],
       pipelineRuns: this.liveRuns(),
+      board: this.board.list(),
       models: { ...DEFAULT_MODEL_SETTINGS, ...this.state.models },
       deployment: deploymentModels(this.env),
     })
@@ -272,6 +289,7 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
     // Google sign-in was removed; drop any client secret a hub still holds.
     this.sql`DROP TABLE IF EXISTS google_client`
     this.refreshDesk()
+    if (this.board.hasQueue()) await this.ensureBoardHeartbeat()
     await this.startSpend()
     // After an MCP sign-in completes, send the user back to Connections.
     this.mcp.configureOAuthCallback({
@@ -523,6 +541,8 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
       ...this.state,
       bots: this.state.bots.filter((b) => b.id !== botId),
     })
+    this.board.botRemoved(botId)
+    this.publishBoard()
     // A step it was working on would never report back.
     for (const run of this.runs) {
       const index = run.steps.findIndex((s) => s.status === "running")
@@ -594,6 +614,22 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
   @callable()
   async createBot(): Promise<BotSummary> {
     return (await runAsUser(ops.createBot, { hub: this }, {})).bot
+  }
+
+  @callable()
+  saveBotTeam(raw: unknown) {
+    const input = botTeamInput.safeParse(raw)
+    if (!input.success) throw new Error(input.error.issues[0].message)
+    const directory = saveTeam(this.state, input.data, () =>
+      crypto.randomUUID()
+    )
+    this.setState({ ...this.state, ...directory })
+  }
+
+  @callable()
+  deleteBotTeam(id: string) {
+    if (!this.state.teams?.some((team) => team.id === id)) return
+    this.setState({ ...this.state, ...removeTeam(this.state, id) })
   }
 
   /** Onboarding's first bot: one that sets up and runs the others. */
@@ -954,10 +990,23 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
   /** Retry a connection: a fresh sign-in link, or a new handshake. */
   @callable()
   async reconnect(connectionId: string) {
-    const id = serverId(connectionId)
-    const result = await this.mcp.connectToServer(id)
-    if (result.state === "connected") await this.mcp.discoverIfConnected(id)
-    this.syncConnectionStatus()
+    await this.reconnectMcp(serverId(connectionId))
+  }
+
+  /** The same stale session may fail several reads at once. Only reconnect it once. */
+  private reconnectMcp(id: string) {
+    const pending = this.#mcpReconnects.get(id)
+    if (pending) return pending
+    const attempt = (async () => {
+      const result = await this.mcp.connectToServer(id)
+      if (result.state === "connected") await this.mcp.discoverIfConnected(id)
+      return result.state
+    })().finally(() => {
+      this.#mcpReconnects.delete(id)
+      this.syncConnectionStatus()
+    })
+    this.#mcpReconnects.set(id, attempt)
+    return attempt
   }
 
   // ── Push notifications ──────────────────────────────────────────────
@@ -1554,13 +1603,39 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
     if (!this.state.connections.some((c) => c.id === connectionId)) {
       throw new Error("That connection was removed.")
     }
+    const id = serverId(connectionId)
+    const spec = this.mcp
+      .listTools()
+      .find((t) => t.serverId === id && t.name === name)
+    // A name is enough for display, not for deciding whether to replay a call.
+    const readOnly = spec?.annotations?.readOnlyHint === true
+    const client = this.mcp.mcpConnections[id]?.client
     let result: unknown
     try {
-      result = await this.mcp.callTool({
-        serverId: serverId(connectionId),
-        name,
-        arguments: args,
-      })
+      result = await callWithMcpReconnect(
+        () => this.mcp.callTool({ serverId: id, name, arguments: args }),
+        readOnly,
+        async () => {
+          if (!this.state.connections.some((c) => c.id === connectionId))
+            return false
+          const current = this.mcp.mcpConnections[id]
+          if (!current) return false
+          const pending = this.#mcpReconnects.get(id)
+          if (
+            !pending &&
+            current.client !== client &&
+            current.connectionState === "ready"
+          )
+            return true
+          const state = await (pending ?? this.reconnectMcp(id))
+          if (state === "authenticating")
+            throw new Error("Unauthorized: sign-in required")
+          return (
+            state === "connected" &&
+            this.state.connections.some((c) => c.id === connectionId)
+          )
+        }
+      )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       const kind = classifyAppFailure(message)
@@ -1988,9 +2063,163 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
     }
   }
 
+  // ── Board ──────────────────────────────────────────────────────────
+
+  private publishBoard() {
+    this.setState({ ...this.state, board: this.board.list() })
+  }
+
+  private ensureBoardHeartbeat() {
+    if (this.#boardHeartbeat) return this.#boardHeartbeat
+    if (this.getSchedules().some((job) => job.callback === "boardHeartbeat"))
+      return
+    this.#boardHeartbeat = this.scheduleEvery(
+      BOARD_HEARTBEAT_S,
+      "boardHeartbeat"
+    )
+      .then(() => undefined)
+      .finally(() => {
+        this.#boardHeartbeat = undefined
+      })
+    return this.#boardHeartbeat
+  }
+
+  private validateBoardAssignee(id: string | null) {
+    if (id && !this.state.bots.some((bot) => bot.id === id)) {
+      throw new Error("Choose a bot that’s on your team.")
+    }
+  }
+
+  @callable()
+  async createBoardTask(input: BoardDraft) {
+    return this.addBoardTask(input, null)
+  }
+
+  /** Bots create cards through a separate RPC so the author cannot be forged. */
+  async addBoardTaskFromBot(
+    botId: string,
+    input: BoardDraft,
+    requestId: string
+  ) {
+    const bot = this.state.bots.find((entry) => entry.id === botId)
+    if (!bot || bot.paused || bot.access === "read") {
+      throw new Error("This bot can’t add tasks to the Board.")
+    }
+    // A recovered tool call gets the same card even after the user removes it.
+    const hash = new Uint8Array(
+      await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(JSON.stringify([botId, requestId]))
+      )
+    )
+    const h = Array.from(hash.slice(0, 16), (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("")
+    const id = `${h.slice(0, 8)}-${h.slice(8, 12)}-8${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20)}`
+    return this.addBoardTask(input, botId, id)
+  }
+
+  private async addBoardTask(
+    input: BoardDraft,
+    author: string | null,
+    cardId?: string
+  ) {
+    const draft = boardDraftSchema.parse(input)
+    this.validateBoardAssignee(draft.assigneeId)
+    await this.ensureBoardHeartbeat()
+    this.validateBoardAssignee(draft.assigneeId)
+    const id = this.board.create(draft, author, cardId)
+    this.publishBoard()
+    return { id }
+  }
+
+  @callable()
+  async editBoardTask(input: BoardEdit) {
+    const edit = boardEditSchema.parse(input)
+    this.validateBoardAssignee(edit.assigneeId)
+    if (edit.status === "queued") await this.ensureBoardHeartbeat()
+    this.validateBoardAssignee(edit.assigneeId)
+    if (!this.board.edit(edit))
+      throw new Error(
+        "This card changed. Close it and reopen to see the latest version."
+      )
+    this.publishBoard()
+  }
+
+  @callable()
+  async archiveBoardTask(id: string, updatedAt: number) {
+    if (!this.board.archive(id, updatedAt))
+      throw new Error(
+        "This card changed. Close it and reopen to see the latest version."
+      )
+    this.publishBoard()
+  }
+
+  /** One durable heartbeat per team. No model call is needed to claim a card. */
+  async boardHeartbeat() {
+    if (this.#boardRunning) return
+    this.#boardRunning = true
+    try {
+      if (this.board.expire(Date.now() - BOARD_TIMEOUT_MS)) this.publishBoard()
+      if (!this.board.hasQueue()) return
+      const available = this.state.bots.filter(
+        (bot) => bot.status === "idle" && !bot.paused
+      )
+      const attempted = new Set<string>()
+      for (const shared of [false, true]) {
+        for (const bot of available) {
+          if (attempted.size >= 8 || !this.board.hasQueue()) return
+          if (
+            attempted.has(bot.id) ||
+            (shared && bot.name === NEW_BOT_NAME && !bot.role?.trim())
+          )
+            continue
+          const current = this.state.bots.find((entry) => entry.id === bot.id)
+          if (current?.status !== "idle" || current.paused) continue
+          const claim = this.board.claim(bot.id, shared)
+          if (!claim) continue
+          attempted.add(bot.id)
+          const { row, runId } = claim
+          this.publishBoard()
+          try {
+            const agent = await this.bot(bot.id)
+            if (!this.state.bots.some((entry) => entry.id === bot.id)) continue
+            const accepted = await agent.receiveBoardTask(
+              row.id,
+              runId,
+              row.title,
+              row.description
+            )
+            if (!accepted) {
+              this.board.release(row.id, runId, shared ? null : bot.id)
+              this.publishBoard()
+            }
+          } catch (error) {
+            // An RPC failure does not tell us whether the bot accepted the turn.
+            console.error("Board dispatch failed", error)
+            this.board.finish(row.id, runId, bot.id, {
+              status: "failed",
+              result: "",
+              error:
+                "Could not confirm delivery. Check the bot’s chat before retrying.",
+            })
+            this.publishBoard()
+          }
+        }
+      }
+    } finally {
+      this.#boardRunning = false
+    }
+  }
+
   /** A bot finished a task: send the result to whoever handed it out. */
   async completeTask(botId: string, task: BotTask, outcome: TaskOutcome) {
     const { replyTo } = task
+    if (replyTo.kind === "board") {
+      this.board.finish(replyTo.cardId, task.id, botId, outcome)
+      this.publishBoard()
+      return
+    }
     if (replyTo.kind === "pipeline") {
       await this.finishBotStep(replyTo.runId, replyTo.step, botId, outcome)
       return

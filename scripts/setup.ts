@@ -51,8 +51,10 @@ interface DeployFile {
   gateway?: string
   emails?: string[]
   host?: string
+  customDomain?: string
   accessTeamDomain?: string
   accessAud?: string
+  attachmentsBucket?: string
 }
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`
@@ -161,7 +163,11 @@ function writeDeploy(file: DeployFile) {
  * while any declared secret is missing, and Coworkers treats an empty one as
  * "feature off", so they start empty.
  */
-const OPTIONAL_SECRETS = ["BROWSER_RUN_API_TOKEN", "AI_GATEWAY_API_TOKEN"]
+const OPTIONAL_SECRETS = [
+  "BROWSER_RUN_API_TOKEN",
+  "AI_GATEWAY_API_TOKEN",
+  "EMAIL_ROUTING_API_TOKEN",
+]
 
 function ensureSecrets() {
   let file = existsSync(SECRETS_FILE) ? readFileSync(SECRETS_FILE, "utf8") : ""
@@ -267,15 +273,47 @@ async function main() {
   const name = (
     await ask("Worker name", saved.name ?? "coworkers")
   ).toLowerCase()
-  const emails = (
-    await ask(
-      "Who can sign in (comma separated)",
-      (saved.emails ?? [user.email]).join(", ")
+  const hostname = (
+    process.env.COWORKERS_CUSTOM_DOMAIN ??
+    (await ask(
+      "Custom hostname (or workers.dev)",
+      saved.customDomain ?? "workers.dev"
+    ))
+  )
+    .trim()
+    .toLowerCase()
+  const customDomain = hostname === "workers.dev" ? undefined : hostname
+  if (
+    customDomain !== undefined &&
+    !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$/.test(
+      customDomain
     )
+  ) {
+    throw new Error(
+      "Enter a hostname such as agents.example.com, without https:// or a path."
+    )
+  }
+  const emails = (
+    process.env.COWORKERS_ACCESS_ALLOW ??
+    (await ask(
+      "Who can sign in (email addresses or domains, comma separated)",
+      (saved.emails ?? [user.email]).join(", ")
+    ))
   )
     .split(",")
-    .map((e) => e.trim().toLowerCase())
+    .map((e) => e.trim().toLowerCase().replace(/^@/, ""))
     .filter(Boolean)
+  if (
+    emails.length === 0 ||
+    emails.some(
+      (entry) =>
+        !/^(?:[^@\s,]+@)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(
+          entry
+        )
+    )
+  ) {
+    throw new Error("Enter at least one valid email address or email domain.")
+  }
 
   let model = saved.model
   if (
@@ -300,8 +338,11 @@ async function main() {
   const accountId = account.id
   // A new name (or account) is a new Worker: start its URL and Access over.
   const fresh = name !== saved.name || accountId !== saved.accountId
+  const hostnameChanged = customDomain !== saved.customDomain
   let file: DeployFile = {
     ...(fresh ? {} : saved),
+    ...(hostnameChanged ? { host: undefined, accessAud: undefined } : {}),
+    customDomain,
     accountId,
     name,
     emails,
@@ -336,6 +377,18 @@ async function main() {
     console.log(green("  Created"))
   }
 
+  const attachmentsBucket =
+    process.env.COWORKERS_ATTACHMENTS_BUCKET ??
+    file.attachmentsBucket ??
+    `${name.slice(0, 51)}-attachments`
+  step("Preparing private storage", `R2 bucket ${attachmentsBucket}`)
+  if (!(await maybe(["r2", "buckets", "get", attachmentsBucket], accountId))) {
+    await cf(["r2", "buckets", "create", "--name", attachmentsBucket], {
+      accountId,
+    })
+  }
+  file.attachmentsBucket = attachmentsBucket
+
   step("Making a key for the doorbell", "Web Push keys")
   console.log(`  ${ensureSecrets()} in ${SECRETS_FILE}`)
 
@@ -344,7 +397,7 @@ async function main() {
     step("Bolting on the parts", "first deploy, closed until Access is ready")
     writeDeploy({ ...file, ...LOCKED })
     const host = await deploy(accountId)
-    file.host = host ?? file.host
+    file.host = customDomain ?? host ?? file.host
     if (!file.host) {
       throw new Error(
         'Could not find the workers.dev URL in the deploy output. Add "host" to coworkers.deploy.json and run setup again.'
@@ -408,7 +461,11 @@ async function main() {
   const allow = await upsert("policies", accountId, policies, {
     name: `coworkers ${name}: people`,
     decision: "allow",
-    include: emails.map((email) => ({ email: { email } })),
+    include: emails.map((entry) =>
+      entry.includes("@")
+        ? { email: { email: entry } }
+        : { email_domain: { domain: entry } }
+    ),
   })
   const bypass = await upsert("policies", accountId, policies, {
     name: `coworkers ${name}: share links and webhooks`,
@@ -441,7 +498,7 @@ async function main() {
   if (!app.aud)
     throw new Error("Access did not return the application's AUD tag.")
   console.log(
-    `  ${emails.length} ${emails.length === 1 ? "person" : "people"} on the list`
+    `  Allowing ${emails.map((entry) => (entry.includes("@") ? entry : `@${entry}`)).join(", ")}`
   )
 
   // ── Final deploy ─────────────────────────────────────────────────
@@ -452,7 +509,7 @@ async function main() {
 
   console.log(`\n${green(bold("Your bots are alive"))} https://${host}`)
   console.log(
-    dim(`  Sign in as ${emails[0]}. Access emails you a one-time code.`)
+    dim("  Sign in with an email address allowed by the Access policy.")
   )
   console.log(
     dim(
