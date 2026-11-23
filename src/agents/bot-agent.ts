@@ -34,6 +34,7 @@ import { createBrowserRuntime } from "@cloudflare/think/tools/browser"
 import type { BrowserRuntime } from "@cloudflare/think/tools/browser"
 import { env, exports } from "cloudflare:workers"
 import { boardDraftSchema } from "@/lib/board"
+import { isDirectTeamRequest } from "@/lib/bot-teams"
 import { routineScheduleTime } from "@/lib/routine-schedule"
 import {
   attachmentKey,
@@ -739,6 +740,7 @@ export class BotAgent extends Think<Env, BotState> {
   #loopGuard = new LoopGuard()
   /** Paces a turn the user is watching: updates, wrap-up, hard stop. */
   #budget = new TurnBudget()
+  #forcedTeamRequestId: string | undefined
   /** Results of scripts this isolate started or is watching, by run id. */
   #scripts = new Map<string, Promise<WorkspaceRuntimeResult<"utf8">>>()
   /** run_js and script_wait calls to wake when their script pauses. */
@@ -1332,6 +1334,20 @@ export class BotAgent extends Think<Env, BotState> {
     this.#lastActivity = Date.now()
     this.#loopGuard.reset()
     this.#budget.start(Date.now())
+    const request = this.messages.at(-1)
+    const directTeamRequest =
+      ctx.trigger === "ws-chat" &&
+      !ctx.continuation &&
+      request?.role === "user" &&
+      Boolean(ctx.tools.create_team) &&
+      this.policyFor("create_team") !== "block" &&
+      isDirectTeamRequest(
+        request.parts
+          .flatMap((part) => (part.type === "text" ? [part.text] : []))
+          .join("\n"),
+        [...others, { name: this.state.name }]
+      )
+    this.#forcedTeamRequestId = directTeamRequest ? ctx.requestId : undefined
     this.#appTools = this.buildAppTools(catalog)
     this.#appToolNames = new Set([
       ...Object.keys(this.#appTools),
@@ -4455,17 +4471,28 @@ export class BotAgent extends Think<Env, BotState> {
     const shaped = shapeToolResults(ctx.messages)
     const withImages = presentMcpImages(shaped ?? ctx.messages)
     const nudge = this.paceStep(ctx)
-    if (!shaped && !withImages && !nudge) return
+    const forceTeam =
+      ctx.stepNumber === 0 &&
+      this.#forcedTeamRequestId !== undefined &&
+      this.#forcedTeamRequestId === this.activeTurn?.requestId
+    if (!shaped && !withImages && !nudge && !forceTeam) return
     const messages = [...(withImages ?? shaped ?? ctx.messages)]
     if (nudge) {
       messages.push({ role: "user", content: nudge.note })
     }
     // Think's StepConfig is an Omit over a union, which drops `messages`
     // from the type; the AI SDK accepts it (and carries it forward).
-    return {
-      messages,
-      ...(nudge?.kind === "stop" ? { toolChoice: "none" } : {}),
-    } as StepConfig
+    const step =
+      nudge?.kind === "stop"
+        ? { toolChoice: "none" }
+        : forceTeam
+          ? {
+              activeTools: ["create_team"],
+              toolChoice: { type: "tool", toolName: "create_team" },
+            }
+          : {}
+    const config = { ...step, messages }
+    return config as StepConfig
   }
 
   /**

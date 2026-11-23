@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { plainMentions } from "./bot-links"
 import type { BotSummary, BotTeam, HubState } from "./types"
 
 export const TEAM_NAME_MAX = 40
@@ -9,6 +10,37 @@ export const botTeamInput = z.object({
 })
 
 type Directory = Pick<HubState, "bots" | "teams">
+
+/** Route only direct requests whose entire member list resolves to known agents. */
+export function isDirectTeamRequest(
+  text: string,
+  bots: readonly { name: string }[]
+) {
+  const clean = plainMentions(text).trim().replace(/[.!]$/, "")
+  if (clean.length > 350 || /[\n?]/.test(clean)) return false
+  const request =
+    /^(?:please\s+)?(?:create|make|set up)\s+(?:a\s+)?(?:new\s+)?team(?:\s+(?:named|called)\s+[^,;]{1,45}?)?\s+with\s+(.+)$/i.exec(
+      clean
+    )
+  if (!request) return false
+  const normalize = (name: string) =>
+    name
+      .trim()
+      .replace(/^(?:the\s+)?@?/i, "")
+      .trim()
+      .toLowerCase()
+  const names = request[1]
+    .replace(/,\s*(?:and\s+)?/gi, "|")
+    .split(/\||\s+(?:and|&)\s+/i)
+    .map(normalize)
+  return (
+    names.length > 0 &&
+    names.every(
+      (name) =>
+        name && bots.filter((bot) => normalize(bot.name) === name).length === 1
+    )
+  )
+}
 
 export function saveTeam(
   state: Directory,

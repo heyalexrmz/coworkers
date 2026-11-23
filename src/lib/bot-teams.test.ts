@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   addTeamMembers,
   botTeamInput,
+  isDirectTeamRequest,
   removeTeam,
   saveTeam,
   sidebarTeams,
@@ -19,6 +20,47 @@ const bot = (id: string, name: string, teamId?: string): BotSummary => ({
   unread: false,
 })
 const newId = () => "product"
+
+it("routes direct team requests without treating questions or instructions about other tasks as a write", () => {
+  const agents = [
+    { name: "CTO" },
+    { name: "Staff Engineer" },
+    { name: "Solutions Engineer" },
+  ]
+  expect(
+    isDirectTeamRequest("Create a team with the CTO and Staff Engineer", agents)
+  ).toBe(true)
+  expect(
+    isDirectTeamRequest(
+      "Please create a team called Product with [@CTO](coworkers://bot/ct0), @Staff Engineer, and Solutions Engineer.",
+      agents
+    )
+  ).toBe(true)
+  expect(
+    isDirectTeamRequest(
+      "Create a team with the CTO and Staff Engineer?",
+      agents
+    )
+  ).toBe(false)
+  expect(
+    isDirectTeamRequest(
+      "Don't create a team with the CTO and Staff Engineer.",
+      agents
+    )
+  ).toBe(false)
+  expect(
+    isDirectTeamRequest(
+      "Create a team with the CTO and have them draft a spec.",
+      agents
+    )
+  ).toBe(false)
+  expect(
+    isDirectTeamRequest("Create a team with the CTO and Staff Engineer", [
+      ...agents,
+      { name: "CTO" },
+    ])
+  ).toBe(false)
+})
 
 describe("sidebar teams", () => {
   it("creates a group on a legacy directory and searches by team and by bot", () => {
