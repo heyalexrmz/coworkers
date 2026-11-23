@@ -369,7 +369,7 @@ export const createBot = defineOperation({
 export const createTeam = defineOperation({
   name: "create_team",
   description:
-    "Create a named group in the user's Bots sidebar with existing agents, or add agents to a team with the same name. Use this when the user asks to create a team or group agents in the sidebar. It doesn’t change agent roles, permissions, or delegation. Each agent can only be in one team.",
+    "Create a team of existing agents or add them to a team with the same name. Teams appear in the Bots sidebar automatically. Use this when the user says to create a team or group agents, even if they don't mention the sidebar. Pick a short, fitting name if none was provided. This does not change agent roles, permissions, or delegation. Each agent can only be in one team.",
   input: z.object({
     name: z.string().trim().min(1).max(TEAM_NAME_MAX),
     bots: z.array(botRef).min(1),
