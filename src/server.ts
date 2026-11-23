@@ -2,7 +2,7 @@ import handler from "@tanstack/react-start/server-entry"
 import { getAgentByName, routeAgentEmail, routeAgentRequest } from "agents"
 import { locationHintFor } from "@/lib/location-hint"
 import { Unauthorized, identify } from "@/lib/auth"
-import { botInstanceName } from "@/lib/types"
+import { botInstanceName, teamIdFromThread } from "@/lib/types"
 import { handleAppRequest } from "./agents/apps-runtime"
 import { emailDirectory } from "./agents/email-directory"
 import { handleOAuthRequest } from "./mcp/oauth"
@@ -59,6 +59,17 @@ export default {
       }
       if (!ownsInstance(userId, target.agent, target.instance)) {
         return new Response("Forbidden", { status: 403 })
+      }
+      if (target.agent === "bot-agent") {
+        const botId = target.instance.slice(userId.length + 1)
+        if (teamIdFromThread(botId) !== null) {
+          const hub = await getAgentByName(
+            env.UserHub as unknown as DurableObjectNamespace<UserHub>,
+            userId
+          )
+          if (!(await hub.hasTeamThread(botId)))
+            return new Response("Not found", { status: 404 })
+        }
       }
       // Agent WebSockets and agent HTTP (MCP OAuth callbacks).
       const response = await routeAgentRequest(request, env, {

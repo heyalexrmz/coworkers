@@ -930,6 +930,15 @@
   padding: 8px;
 }
 
+.composer[data-hide-actions] .composer-grid {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "field send";
+}
+
+.composer[data-hide-actions][data-expanded="true"] .composer-grid {
+  grid-template-areas: "field field" ". send";
+}
+
 /* The buttons grow for fingers; the one-line field stays between them. */
 @media (pointer: coarse) {
   .composer-grid {

@@ -211,15 +211,14 @@ function Desk() {
     return () => clearTimeout(timer)
   }, [undo])
 
-  const cards = hub.state.desk ?? []
-  const lanes = useMemo(
-    () => ({
+  const lanes = useMemo(() => {
+    const cards = hub.state.desk ?? []
+    return {
       needs: cards.filter((c) => c.lane === "needs_you"),
       fyi: cards.filter((c) => c.lane === "fyi"),
       done: cards.filter((c) => c.lane === "done"),
-    }),
-    [cards]
-  )
+    }
+  }, [hub.state.desk])
   const bots = useMemo(
     () => new Map(hub.state.bots.map((b) => [b.id, b])),
     [hub.state.bots]

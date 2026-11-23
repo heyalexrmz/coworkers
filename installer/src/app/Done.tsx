@@ -3,7 +3,7 @@ import { RobotHead } from "robot-heads"
 import { BOT_AVATAR_LOOKS } from "@coworkers/types"
 import { modelName, providerOf } from "@coworkers/models"
 import type { InstallerState } from "../shared"
-import type { InstallerAgent } from "./App"
+import type { InstallerAgent } from "./Signed"
 import { ArrowRightIcon } from "./icons"
 
 const COLORS = Object.values(BOT_AVATAR_LOOKS).map((l) => l.color)

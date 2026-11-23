@@ -24,6 +24,19 @@ afterEach(() => db.close())
 const done = { status: "done", result: "The result" } as const
 
 describe("Board queue", () => {
+  it("renews only the matching active claim and still accepts one result", () => {
+    const id = board.create({ title: "Waiting for approval" }, null)
+    const { runId } = board.claim("a", true)!
+    const cutoff = Date.now() + 1000
+    expect(board.staleClaims(cutoff)).toEqual([{ id, runId, assigneeId: "a" }])
+    board.renewClaim(id, "old-run", cutoff + 1)
+    expect(board.staleClaims(cutoff)).toHaveLength(1)
+    board.renewClaim(id, runId, cutoff + 1)
+    expect(board.expire(cutoff)).toBe(false)
+    board.finish(id, runId, "a", done)
+    board.finish(id, runId, "a", { ...done, result: "duplicate" })
+    expect(board.list()[0].result).toBe(done.result)
+  })
   it("respects explicit assignments and claims an unassigned card only once", () => {
     const assigned = board.create({ title: "Assigned", assigneeId: "a" }, null)
     const shared = board.create({ title: "Shared" }, "b")

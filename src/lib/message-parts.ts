@@ -1,6 +1,12 @@
 import type { UIMessage } from "ai"
+import { TEAM_REPLY_TOOL, teamReplyOutput } from "@/lib/bot-teams"
 import { NO_UPDATE } from "@/lib/types"
-import type { MessageMeta, MessageOrigin, Routine } from "@/lib/types"
+import type {
+  MessageMeta,
+  MessageOrigin,
+  Routine,
+  TeamReplyResult,
+} from "@/lib/types"
 
 export type ToolCallState = "running" | "waiting" | "done" | "error" | "denied"
 
@@ -18,6 +24,7 @@ export interface ToolCall {
 
 export type Block =
   | { kind: "text"; key: string; text: string }
+  | { kind: "team-replies"; key: string; result: TeamReplyResult }
   | { kind: "event"; key: string; label: string }
   | { kind: "computer"; key: string; calls: ToolCall[] }
   | { kind: "steps"; key: string; calls: ToolCall[] }
@@ -168,6 +175,17 @@ export function toBlocks(message: UIMessage): Block[] {
       if (call.state === "done") {
         blocks.push({ kind: "event", key, label: "Updated memory" })
       }
+      return
+    }
+    if (call.name === TEAM_REPLY_TOOL) {
+      const result = teamReplyOutput([part])
+      if (result) blocks.push({ kind: "team-replies", key, result })
+      else if (call.state === "error")
+        blocks.push({
+          kind: "event",
+          key,
+          label: "The team couldn’t reply. Try again in a moment.",
+        })
       return
     }
     if (call.name === "track_item" || call.name === "resolve_item") {

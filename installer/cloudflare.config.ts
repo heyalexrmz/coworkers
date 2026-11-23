@@ -1,4 +1,4 @@
-import { bindings, defineConfig, exports } from "cf/config"
+import { bindings, defineConfig, exports as workerExports } from "cf/config"
 
 const WORKER_NAME = "coworkers-installer"
 
@@ -21,7 +21,7 @@ export default defineConfig(({ mode }) => ({
     },
     exports: {
       // One per sign-in: the plan, the progress, and the encrypted token.
-      Installer: exports.durableObject({ storage: "sqlite" }),
+      Installer: workerExports.durableObject({ storage: "sqlite" }),
     },
     env: {
       ASSETS: bindings.assets(),

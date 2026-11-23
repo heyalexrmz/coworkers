@@ -1,7 +1,8 @@
 import type { AppAccess, AppLink } from "@/lib/types"
 import { AppDataError, assertCollection } from "./app-store"
-export { NO_ACCESS, parseAccess } from "./app-store"
 import type { AppDataOp } from "./apps-runtime"
+
+export { NO_ACCESS, parseAccess } from "./app-store"
 
 /**
  * Who may do what through an app link.

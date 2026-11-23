@@ -2,9 +2,13 @@ packages:
   - "."
   - "installer"
 
-onlyBuiltDependencies:
-  - esbuild
-  - msw
-  - sharp
-  - unrs-resolver
-  - workerd
+# Approve only the dependency build scripts the workspace uses.
+allowBuilds:
+  '@mongodb-js/zstd': false
+  core-js-pure: false
+  esbuild: true
+  msw: true
+  node-liblzma: false
+  sharp: true
+  unrs-resolver: true
+  workerd: true

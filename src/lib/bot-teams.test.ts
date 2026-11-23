@@ -6,6 +6,8 @@ import {
   removeTeam,
   saveTeam,
   sidebarTeams,
+  teamRecipients,
+  teamReplyOutput,
 } from "./bot-teams"
 import type { BotSummary } from "./types"
 
@@ -60,6 +62,70 @@ it("routes direct team requests without treating questions or instructions about
       { name: "CTO" },
     ])
   ).toBe(false)
+})
+
+describe("team conversations", () => {
+  const members = [bot("1", "CTO"), bot("2", "Staff Engineer")]
+
+  it("routes general messages to the team and mentions only to current members", () => {
+    expect(teamRecipients("What do you think?", members)).toEqual(members)
+    expect(teamRecipients("@Former Member, hello", members)).toEqual([])
+    expect(teamRecipients("What about alex@example.com?", members)).toEqual(
+      members
+    )
+    expect(
+      teamRecipients("@Staff Engineer, what do you think?", members)
+    ).toEqual([members[1]])
+    expect(
+      teamRecipients("[@Other](coworkers://bot/3) hello", members)
+    ).toEqual([])
+    expect(
+      teamRecipients(
+        "[@CTO](coworkers://bot/1) and [@Other](coworkers://bot/3)",
+        members
+      )
+    ).toEqual([members[0]])
+  })
+
+  it("preserves the thread preview when a team changes name or membership", () => {
+    const thread = {
+      author: "CTO",
+      preview: "Proposal received",
+      unread: true,
+      updatedAt: 1,
+    }
+    const directory = {
+      bots: members,
+      teams: [{ id: "product", name: "Product", thread }],
+    }
+    const edited = saveTeam(
+      directory,
+      { id: "product", name: "Engineering", botIds: ["2"] },
+      newId
+    )
+    expect(edited.teams[0].thread).toEqual(thread)
+    expect(sidebarTeams(edited, "proposal").groups[0].team.name).toBe(
+      "Engineering"
+    )
+  })
+
+  it("uses only recorded member replies for attributed messages", () => {
+    const output = {
+      replies: [
+        { botId: "1", name: "CTO", avatar: "blue-rectangle", text: "Hello" },
+      ],
+    }
+    expect(
+      teamReplyOutput([
+        { type: "tool-ask_team", state: "input-available", output },
+      ])
+    ).toBeUndefined()
+    expect(
+      teamReplyOutput([
+        { type: "tool-ask_team", state: "output-available", output },
+      ])
+    ).toBe(output)
+  })
 })
 
 describe("sidebar teams", () => {

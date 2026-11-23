@@ -8,11 +8,11 @@ import type { Caller, Failure, Operation, OperationContext } from "./operation"
  * the caller's level, the input, approval for destructive operations, the
  * ceiling. Only then does the operation run.
  */
-export async function runOperation<I, O>(
-  op: Operation<I, O>,
+export async function runOperation<TInput, TOutput>(
+  op: Operation<TInput, TOutput>,
   ctx: OperationContext,
   rawInput: unknown
-): Promise<O | Failure> {
+): Promise<TOutput | Failure> {
   const { caller } = ctx
   if (op.callers && !op.callers.includes(caller.kind)) {
     return fail("unavailable", `${op.name} is not available to this caller.`)

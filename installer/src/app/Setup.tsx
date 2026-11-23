@@ -4,7 +4,7 @@ import { Select } from "@cloudflare/kumo/components/select"
 import { MODELS, PROVIDERS, formatPrice, providerOf } from "@coworkers/models"
 import type { ProviderId } from "@coworkers/models"
 import type { InstallPlan, InstallerState, NameCheck, Zone } from "../shared"
-import type { InstallerAgent } from "./App"
+import type { InstallerAgent } from "./Signed"
 import { XIcon } from "./icons"
 
 const FIELD =

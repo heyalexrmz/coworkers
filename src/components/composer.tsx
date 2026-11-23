@@ -37,6 +37,8 @@ interface ComposerProps {
   onStop: () => void
   /** Saves a file to the bot's inbox and returns its workspace path. */
   onAttach?: (file: File) => Promise<string>
+  /** Team conversations support replies, not individual bot actions. */
+  hideActions?: boolean
   /** Other bots, for @mentions. Absent: no picker. */
   bots?: MentionBot[]
 }
@@ -214,6 +216,7 @@ export function Composer({
   onSend,
   onStop,
   onAttach,
+  hideActions = false,
   bots,
 }: ComposerProps) {
   const [text, setText] = useState("")
@@ -462,6 +465,7 @@ export function Composer({
         className="composer"
         data-expanded={expanded}
         data-dragging={dragging || undefined}
+        data-hide-actions={hideActions || undefined}
         style={height ? { height } : undefined}
       >
         <div ref={inner} className="composer-grid">
@@ -483,48 +487,50 @@ export function Composer({
               ))}
             </ul>
           ) : null}
-          <div className="composer-plus" data-flip>
-            <DropdownMenu>
-              <DropdownMenu.Trigger
-                disabled={disabled}
-                render={(props) => (
-                  <button
-                    {...props}
-                    type="button"
-                    aria-label="More"
-                    disabled={disabled}
-                    className="icon-btn is-filled"
+          {!hideActions ? (
+            <div className="composer-plus" data-flip>
+              <DropdownMenu>
+                <DropdownMenu.Trigger
+                  disabled={disabled}
+                  render={(props) => (
+                    <button
+                      {...props}
+                      type="button"
+                      aria-label="More"
+                      disabled={disabled}
+                      className="icon-btn is-filled"
+                    >
+                      <PlusIcon size={18} />
+                    </button>
+                  )}
+                />
+                <DropdownMenu.Content side="top" align="start">
+                  <DropdownMenu.Item
+                    icon={<PaperclipIcon />}
+                    disabled={!onAttach}
+                    onClick={() => fileInput.current?.click()}
                   >
-                    <PlusIcon size={18} />
-                  </button>
-                )}
-              />
-              <DropdownMenu.Content side="top" align="start">
-                <DropdownMenu.Item
-                  icon={<PaperclipIcon />}
-                  disabled={!onAttach}
-                  onClick={() => fileInput.current?.click()}
-                >
-                  Attach a file
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  icon={<ChalkboardTeacherIcon />}
-                  onClick={() => {
-                    setText(TEACH_PROMPT)
-                    // After the menu closes and returns focus to its trigger.
-                    requestAnimationFrame(() => {
-                      const el = textarea.current
-                      if (!el) return
-                      el.focus()
-                      el.setSelectionRange(el.value.length, el.value.length)
-                    })
-                  }}
-                >
-                  Teach a task
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu>
-          </div>
+                    Attach a file
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    icon={<ChalkboardTeacherIcon />}
+                    onClick={() => {
+                      setText(TEACH_PROMPT)
+                      // After the menu closes and returns focus to its trigger.
+                      requestAnimationFrame(() => {
+                        const el = textarea.current
+                        if (!el) return
+                        el.focus()
+                        el.setSelectionRange(el.value.length, el.value.length)
+                      })
+                    }}
+                  >
+                    Teach a task
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu>
+            </div>
+          ) : null}
           <textarea
             ref={textarea}
             rows={1}

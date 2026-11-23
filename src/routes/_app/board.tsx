@@ -45,17 +45,15 @@ function BoardPage() {
   const tasks = state.board ?? []
   const bots = state.bots
   const hash = useLocation({ select: (location) => location.hash })
-  const linked = hash
-    ? tasks.find((task) => `card-${task.id}` === hash)
-    : undefined
+  const linkedId = tasks.find((task) => `card-${task.id}` === hash)?.id
   const [editor, setEditor] = useState<{ task?: BoardTask } | null>(null)
 
   useEffect(() => {
-    if (linked)
+    if (linkedId)
       document
-        .getElementById(`card-${linked.id}`)
+        .getElementById(`card-${linkedId}`)
         ?.scrollIntoView({ block: "nearest", inline: "nearest" })
-  }, [linked?.id])
+  }, [linkedId])
 
   return (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -130,7 +128,7 @@ function BoardPage() {
                       key={task.id}
                       task={task}
                       bots={bots}
-                      highlighted={linked?.id === task.id}
+                      highlighted={linkedId === task.id}
                       onOpen={() => setEditor({ task })}
                     />
                   ))

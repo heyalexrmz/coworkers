@@ -15,7 +15,6 @@ import {
   BellSlashIcon,
   BoardIcon,
   BotIcon,
-  FileEditIcon,
   GearSixIcon,
   InboxIcon,
   MagnifyingGlassIcon,
@@ -25,6 +24,7 @@ import {
 import { ApprovalPopover } from "@/components/approval-popover"
 import { BotAvatar } from "@/components/bot-avatar"
 import { BotTeamDialog } from "@/components/bot-team-dialog"
+import { TeamAvatars } from "@/components/team-avatars"
 import { SettingsSidebar, rememberAppPath } from "@/components/settings-nav"
 import { EmptyState } from "@/components/empty-state"
 import { ShimmerText } from "@/components/shimmer-text"
@@ -34,6 +34,7 @@ import { useHub } from "@/lib/hub-context"
 import { usePushNotifications } from "@/lib/push"
 import { useIsPhone } from "@/lib/use-is-phone"
 import { useSwipeViews } from "@/lib/use-swipe-views"
+import { teamThreadId } from "@/lib/types"
 import type { BotSummary, BotTeam, Pipeline, PipelineRun } from "@/lib/types"
 
 /** Bots large enough to earn the phone home's top row. */
@@ -340,6 +341,52 @@ function FeaturedBots({ bots }: { bots: BotSummary[] }) {
   )
 }
 
+function TeamRow({
+  team,
+  members,
+  active,
+}: {
+  team: BotTeam
+  members: BotSummary[]
+  active: boolean
+}) {
+  const preview = team.thread
+  return (
+    <Link
+      to="/bots/$botId"
+      params={{ botId: teamThreadId(team.id) }}
+      className={`${ROW} ${active ? "bg-(--fill-active)" : "hover:bg-(--fill-hover)"}`}
+    >
+      <span className="relative shrink-0">
+        <TeamAvatars members={members} />
+        {preview?.unread && !active ? (
+          <span
+            className="unread-dot absolute -top-0.5 -right-0.5 size-3 rounded-full bg-kumo-danger ring-2 ring-kumo-canvas"
+            aria-label="Unread"
+          />
+        ) : null}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-baseline gap-1.5 text-[15px] text-kumo-default">
+          <span className="min-w-0 truncate font-medium">{team.name}</span>
+          {preview?.author ? (
+            <span className="max-w-[45%] min-w-0 shrink-0 truncate">
+              · {preview.author}
+            </span>
+          ) : null}
+        </span>
+        <span className="block truncate text-sm text-kumo-subtle">
+          {preview?.preview
+            ? plainMentions(preview.preview)
+            : members.length
+              ? `${members.length} ${members.length === 1 ? "agent" : "agents"} · No messages yet`
+              : "No agents yet"}
+        </span>
+      </span>
+    </Link>
+  )
+}
+
 function BotsView({ home }: { home: boolean }) {
   const hub = useHub()
   const navigate = useNavigate()
@@ -416,38 +463,29 @@ function BotsView({ home }: { home: boolean }) {
             </button>
           </div>
         ) : null}
-        {groups.map(({ team, bots }) => (
-          <section
+        {groups.map(({ team }) => (
+          <TeamRow
             key={team.id}
-            aria-label={`${team.name} team`}
-            className="mt-1"
-          >
-            <div className="flex min-h-8 items-center justify-between gap-2 px-2.5">
-              <h2 className="min-w-0 truncate text-xs font-semibold text-kumo-default">
-                {team.name}
-              </h2>
-              <button
-                type="button"
-                aria-label={`Edit ${team.name} team`}
-                disabled={!hub.live}
-                onClick={() => setEditor(team)}
-                className="icon-btn size-7! shrink-0"
-              >
-                <FileEditIcon size={14} />
-              </button>
-            </div>
-            <div className="ml-2 border-l border-kumo-line pl-1.5">
-              {bots.map((bot) => (
-                <BotRow key={bot.id} bot={bot} active={bot.id === botId} />
-              ))}
-              {!bots.length ? (
-                <p className="px-2.5 py-2 text-xs text-kumo-subtle">
-                  No agents yet
-                </p>
-              ) : null}
-            </div>
-          </section>
+            team={team}
+            members={bots.filter((bot) => bot.teamId === team.id)}
+            active={botId === teamThreadId(team.id)}
+          />
         ))}
+        {query.trim()
+          ? groups.flatMap(({ bots: members }) =>
+              members
+                .filter((bot) => {
+                  const needle = query.trim().toLowerCase()
+                  return (
+                    bot.name.toLowerCase().includes(needle) ||
+                    bot.preview.toLowerCase().includes(needle)
+                  )
+                })
+                .map((bot) => (
+                  <BotRow key={bot.id} bot={bot} active={bot.id === botId} />
+                ))
+            )
+          : null}
         {teams?.length && ungrouped.length ? (
           <h2 className="mt-2 px-2.5 py-1.5 text-xs font-semibold text-kumo-subtle">
             Ungrouped

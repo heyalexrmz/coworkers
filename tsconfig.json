@@ -4,6 +4,8 @@
     "**/*.tsx",
     ".cloudflare/types/**/*.d.ts",
     "eslint.config.js",
+    "scripts/*.mjs",
+    "public/sw.js",
     "prettier.config.js",
     "vite.config.js"
   ],

@@ -347,6 +347,26 @@ Either way, Coworkers then checks the Access token on every request and answers
 401 without a valid one, so it stays closed even if Access is turned off by
 mistake. Each email gets its own bots.
 
+### Code-only releases with Durable Object deferral
+
+For an existing Access-protected deployment using `coworkers.deploy.json`:
+
+```sh
+pnpm run deploy:deferred --dry-run   # print the deployment request; no upload
+pnpm run deploy:deferred             # build, upload a version, then switch traffic
+```
+
+This leaves the existing routes and triggers in place and requests up to 30
+minutes of best-effort deferral for active Durable Objects. It does not prevent
+resets or carry over to later releases. Use the regular deployment flow for
+initial setup, trigger or route updates, or Durable Object migrations.
+
+Before rolling recovery changes out to production, use a separate staging Worker
+and its own Access configuration. Start a Board task and a one-off routine, leave
+an approval pending, then deploy. Verify that the approval remains actionable,
+that each run has only one result, and that an interrupted write is shown for
+review rather than repeated. Use a test integration and inspect its action log.
+
 ### After deploying: models
 
 Open **Models** (the brain icon at the bottom of the sidebar). Workers AI
@@ -416,6 +436,7 @@ AGENTS.md             read this first if you're an AI coding agent
 | `pnpm build`      | Production build                        |
 | `pnpm run setup`  | Deploy with AI Gateway + Access (asks)  |
 | `pnpm run deploy` | Build and deploy                        |
-| `pnpm test`       | Vitest                                  |
+| `pnpm check`      | Lint, formatting, type checks and tests for the app and installer |
+| `pnpm test`       | App tests (Vitest)                       |
 | `pnpm typecheck`  | Regenerate binding types, then `tsc`    |
 | `pnpm format`     | Prettier                                |

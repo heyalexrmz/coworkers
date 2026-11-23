@@ -4,7 +4,7 @@ import type { RobotHeadState } from "robot-heads"
 import { BOT_AVATARS, BOT_AVATAR_LOOKS } from "@coworkers/types"
 import { STEP_COPY } from "../shared"
 import type { InstallerState, StepStatus } from "../shared"
-import type { InstallerAgent } from "./App"
+import type { InstallerAgent } from "./Signed"
 import { ExternalIcon, WarningIcon } from "./icons"
 
 const FACE: Record<StepStatus, RobotHeadState> = {

@@ -4,6 +4,7 @@
  */
 
 import type { RobotHeadShape } from "robot-heads"
+import type { BoardTask } from "./board"
 import type { DeploymentModels, ModelSettings } from "./models"
 import type { ShopPick } from "./shop"
 
@@ -55,6 +56,46 @@ export interface BotSummary {
 export interface BotTeam {
   id: string
   name: string
+  thread?: {
+    author: string
+    preview: string
+    updatedAt: number
+    unread: boolean
+  }
+}
+
+export interface TeamReply {
+  botId: string
+  name: string
+  avatar: BotAvatarKind
+  text: string
+  unavailable?: boolean
+}
+
+export interface TeamReplyResult {
+  replies: TeamReply[]
+  handoffs?: { from: string; to: string; task: string; after: number }[]
+  working?: string[]
+  note?: string
+}
+
+export type TeamParticipant = Pick<
+  BotSummary,
+  "id" | "name" | "avatar" | "role" | "paused"
+>
+
+export interface TeamContribution {
+  text: string
+  requests: { botId: string; task: string }[]
+  unavailable?: boolean
+}
+
+export function teamThreadId(teamId: string) {
+  return `team-${teamId}`
+}
+
+export function teamIdFromThread(botId: string) {
+  return botId.startsWith("team-") ? botId.slice(5) : null
 }
 
 export interface BotTeamInput {
@@ -122,7 +163,7 @@ export interface HubState {
   /** Named sidebar groups; absent on older hubs. */
   teams?: BotTeam[]
   /** Shared work queue, owned by the UserHub. */
-  board?: import("./board").BoardTask[]
+  board?: BoardTask[]
   connections: Connection[]
   /** Account-wide model choice. Absent on hubs created before models were configurable. */
   models?: ModelSettings

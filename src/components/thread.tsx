@@ -69,7 +69,12 @@ import type {
   NavigateBrowser,
 } from "@/components/computer-card"
 import type { Block, ToolCall } from "@/lib/message-parts"
-import type { BotState, MessageMeta, ScriptApproval } from "@/lib/types"
+import type {
+  BotState,
+  MessageMeta,
+  ScriptApproval,
+  TeamReplyResult,
+} from "@/lib/types"
 
 export type OnApproval = (
   approvalId: string,
@@ -90,6 +95,7 @@ export type OnAnswerChoice = (
 ) => Promise<void>
 
 interface ThreadProps {
+  empty?: React.ReactNode
   bot: Pick<BotState, "name" | "avatar" | "status">
   messages: UIMessage[]
   /** A turn is in flight (submitted or streaming). */
@@ -822,6 +828,8 @@ function AssistantMessage({
             <Prose text={block.text} />
           </div>
         )
+      case "team-replies":
+        return <TeamReplies result={block.result} live={live} />
       case "routine":
         return (
           <RoutineSummary
@@ -902,6 +910,71 @@ function AssistantMessage({
         )
     }
   }
+}
+
+function TeamReplies({
+  result,
+  live,
+}: {
+  result: TeamReplyResult
+  live: boolean
+}) {
+  const handoffsAt = (position: number) =>
+    result.handoffs
+      ?.filter((handoff) => handoff.after === position)
+      .map(({ from, to, task }, index) => (
+        <div
+          key={`${position}:${index}`}
+          className="ml-10 max-w-[80%] min-w-0 border-l-2 border-kumo-line pl-3 text-sm text-kumo-subtle"
+        >
+          <p className="font-medium text-kumo-default">
+            {from} asked {to}
+          </p>
+          {task.length > 240 ? (
+            <details>
+              <summary className="min-h-9 w-fit cursor-pointer rounded-sm py-2 outline-none focus-visible:ring-2 focus-visible:ring-kumo-focus">
+                Show handoff details
+              </summary>
+              <p className="wrap-anywhere whitespace-pre-line">{task}</p>
+            </details>
+          ) : (
+            <p className="wrap-anywhere whitespace-pre-line">{task}</p>
+          )}
+        </div>
+      ))
+  return (
+    <div className="flex min-w-0 flex-col items-start gap-5">
+      {result.replies.map((reply, i) => (
+        <Fragment key={`${reply.botId}:${i}`}>
+          {handoffsAt(i)}
+          <div className="flex w-full min-w-0 items-start gap-2">
+            <BotAvatar avatar={reply.avatar} size={32} />
+            <div className="max-w-[85%] min-w-0">
+              <p className="mb-1 truncate pl-1.5 text-xs font-medium text-kumo-subtle">
+                {reply.name}
+              </p>
+              {reply.unavailable ? (
+                <p className="pl-1.5 text-sm text-kumo-subtle">{reply.text}</p>
+              ) : (
+                <div className="w-fit rounded-[20px] bg-kumo-tint px-4 py-2.5 text-kumo-default">
+                  <Prose text={reply.text} />
+                </div>
+              )}
+            </div>
+          </div>
+        </Fragment>
+      ))}
+      {handoffsAt(result.replies.length)}
+      {live && result.working?.length ? (
+        <div role="status" className="ml-10 text-sm">
+          <ShimmerText
+            text={`${result.working.join(", ")} ${result.working.length === 1 ? "is" : "are"} replying…`}
+          />
+        </div>
+      ) : null}
+      {result.note ? <SystemEvent>{result.note}</SystemEvent> : null}
+    </div>
+  )
 }
 
 function UserAttachment({
@@ -1180,6 +1253,7 @@ function taskAnchor(message: UIMessage) {
 export function Thread({
   bot,
   messages,
+  empty,
   busy,
   botId,
   getLiveView,
@@ -1293,7 +1367,11 @@ export function Thread({
     ((lastPart?.type === "text" && lastPart.state === "streaming") ||
       (lastTurn.work.length > 0 && lastTurn.replyKey === undefined) ||
       lastBlocks.at(-1)?.kind === "computer" ||
-      lastBlocks.at(-1)?.kind === "show")
+      lastBlocks.at(-1)?.kind === "show" ||
+      lastBlocks.some(
+        (block) =>
+          block.kind === "team-replies" && Boolean(block.result.working?.length)
+      ))
   const waitingOnUser = bot.status === "action_needed"
 
   // "Show earlier" adds messages above: keep what was on screen in place.
@@ -1334,6 +1412,7 @@ export function Thread({
         ref={content}
         className="mx-auto flex max-w-[820px] flex-col gap-5 px-4 pt-2 pb-8 md:px-6"
       >
+        {!rendered.length ? empty : null}
         {onLoadEarlier ? (
           <div className="flex justify-center pt-2">
             <Button

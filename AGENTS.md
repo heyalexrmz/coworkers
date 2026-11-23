@@ -9,6 +9,7 @@ TanStack Start, for Workers, and especially for the `cf` CLI.
 
 Coworkers is a multi-bot "AI teammates" app. Each bot is a
 Durable Object with its own chat, memory, routines, computer and browser.
+Teams also have a separate conversation; they are not permissions boundaries.
 
 | Piece          | Where                                                                             | Notes                                                                                                                                                                             |
 | -------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -17,6 +18,8 @@ Durable Object with its own chat, memory, routines, computer and browser.
 | `BotAgent`     | `src/agents/bot-agent.ts`                                                         | One per bot (`<userId>:<botId>`). Extends `Think`. Tools, rules, routines, computer, browser. Holds no MCP connections of its own.                                                |
 | Models         | `src/lib/models.ts`, `src/agents/models.ts`                                       | Model catalog (shared) and the AI Gateway model factory. Account choice on `UserHub`, per-bot override in `BotState.model`, Workers AI fallback.                                  |
 | System prompt  | `src/agents/prompt.ts`                                                            | Stable "soul" plus per-turn context.                                                                                                                                              |
+| Team threads   | `src/agents/team-conversation.ts`, `src/lib/bot-teams.ts`, `src/components/sidebar.tsx` | One compact conversation row per team. `/bots/team-<teamId>` reuses the Think chat UI and a separate `BotAgent` instance; the `UserHub` owns the roster and sidebar preview. |
+| Board and recovery | `src/agents/board-store.ts`, `src/agents/job-handoffs.ts`, `src/agents/bot-agent.ts` | Board claims are fenced by run ID; a durable handoff queue retries Board result delivery and routine submissions, not the underlying work. |
 | Desk           | `src/agents/desk.ts`, `src/routes/_app/index.tsx`, `src/components/desk-card.tsx` | Home screen of cards. Bots build them (`desk.ts`), the `UserHub` stores them (`desk_cards`) and closes approval cards once they are answered anywhere. Plan: `docs/desk-plan.md`. |
 | Skills         | `src/agents/skill-*.ts`, `src/components/skill-install.tsx`                       | Agent Skills from GitHub or `/.well-known/agent-skills/`. Installed ones live once on the `UserHub`, scoped to bots or all; bots get them from `getSkills()`. Only the user can install.  |
 | Operations     | `src/control/`                                                                    | One definition per action (bots, the browser, later `/mcp`): `runOperation` checks caller, level, approval and ceiling. Plan: `docs/mcp-plan.md`.                                 |
@@ -65,6 +68,46 @@ Things that will bite you:
   move fast. Read the types in `node_modules` and the docs at
   `https://developers.cloudflare.com/agents/llms.txt` before changing how
   they are used.
+
+## Team conversations
+
+- Show a team as one sidebar row with a member-avatar cluster, team name,
+  latest speaker and reply preview. Open the team thread on click; do not
+  replace it with indented individual chats. The thread header links to
+  member chats and team editing. Removing a team leaves individual chats intact.
+- Keep team history separate from members’ one-to-one chats. Check ownership
+  and team existence in `src/server.ts` and current membership and pause
+  status on each member call in `UserHub`. Member replies use their own role
+  and model override but cannot read private chats or execute external actions.
+- An `@mention` selects who starts. The lead can request up to two specific
+  handoffs; teammates see earlier contributions in the same turn, and the
+  lead can synthesize their actual replies. Stream and persist attributed
+  contributions and handoff events via `ask_team`; do not fake replies or
+  fan out the same prompt to everyone by default.
+- The latest user message determines the work. A standalone greeting such
+  as `hola equipo` gets one short reply in the user’s language, with no old
+  task history or delegation available. A request to continue may use that
+  history. Keep regression coverage in `src/agents/team-conversation.test.ts`.
+
+## Background work and production releases
+
+- Board and routine recovery use stable run IDs. Persist Board outcomes before
+  delivering them to the hub; commit the routine history row and submission
+  handoff together. Retry the handoff with the same ID. Keep Board claims for
+  active submissions or pending approvals. If a write may have happened and
+  there is no confirmed result, stop for review rather than replaying it.
+  This handoff recovery does not cover pipeline steps or ordinary delegations.
+- For code-only updates to the existing Access-protected Worker, use
+  `pnpm run deploy:deferred` (`--dry-run` previews the request without uploading).
+  It requests up to 30 minutes of best-effort Durable Object code deferral and
+  leaves routes and triggers alone. Deferral is per deployment and is not a
+  durability guarantee. Use the regular deploy flow for setup, migrations or
+  route/trigger changes.
+- For the `agents.orbitlabsai.app` beta, keep Cloudflare Access in front of the
+  app and `/agents/*` and leave `workers.dev` disabled. Never commit
+  `coworkers.deploy.json` or `.dev.vars.production`. Verify the new Worker
+  version’s traffic allocation and signed-out Access redirects after deploying.
+  A signed-out check does not verify team replies or mid-job recovery.
 
 ## Stack
 
@@ -159,12 +202,16 @@ is only needed for deploys and remote resource commands — `cf dev`,
 pnpm dev         # cf dev   — Vite dev server on :3000, running on workerd
 pnpm build       # cf build — production build into .cloudflare/output/
 pnpm run deploy  # cf deploy — build + upload + deploy
+pnpm check       # lint, formatting, type checks and tests for app + installer
 pnpm typecheck   # regenerate binding types, then tsc
 pnpm cf-typegen  # cf workers types → .cloudflare/types/index.d.ts
 pnpm db:generate # drizzle-kit generate (after a schema exists)
 pnpm format      # prettier
 ```
 
+- ESLint uses the TypeScript 6 API through the `typescript` alias; `tsc`
+  still runs TypeScript 7 through `@typescript/native`. Keep generated code
+  out of lint and formatting rather than editing generated files.
 - Use `pnpm run deploy`, not `pnpm deploy` — the latter is a pnpm built-in
   that does something else.
 - `cf dev` and `cf build` run Vite directly and forward only `--mode`. Set

@@ -21,8 +21,9 @@ import { useAgent } from "agents/react"
 import { useAgentChat } from "@cloudflare/think/react"
 import { Button } from "@cloudflare/kumo/components/button"
 import { Tooltip } from "@cloudflare/kumo/components/tooltip"
-import { GearSixIcon, ComputerIcon } from "@/components/icons"
+import { GearSixIcon, ComputerIcon, FileEditIcon } from "@/components/icons"
 import { BotAvatar } from "@/components/bot-avatar"
+import { BotTeamDialog } from "@/components/bot-team-dialog"
 import { Composer } from "@/components/composer"
 import { ComputerPanel } from "@/components/computer-panel"
 import { SidebarToggle } from "@/components/page-header"
@@ -42,7 +43,7 @@ import {
   droppedFromFront,
   withEarlier,
 } from "@/lib/transcript-window"
-import { botInstanceName } from "@/lib/types"
+import { botInstanceName, teamIdFromThread } from "@/lib/types"
 import type { UIMessage } from "ai"
 import type { BotAgent } from "@/agents/bot-agent"
 import type { BrowserNav } from "@/components/computer-card"
@@ -100,6 +101,7 @@ function BotRoute() {
       <Thread bot={snapshot.state} messages={snapshot.messages} busy={false} />
       <Composer
         botName={snapshot.state.name}
+        hideActions={Boolean(teamIdFromThread(botId))}
         disabled
         busy={false}
         onSend={() => {}}
@@ -127,12 +129,18 @@ function BotPending() {
   const { botId } = Route.useParams()
   const hub = useHub()
   const bot = hub.state.bots.find((b) => b.id === botId)
+  const teamId = teamIdFromThread(botId)
   return (
     <section className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-      <BotHeader bot={bot} />
+      {teamId ? <TeamHeader teamId={teamId} /> : <BotHeader bot={bot} />}
       <div className="flex-1" />
       <Composer
-        botName={bot?.name ?? ""}
+        hideActions={Boolean(teamId)}
+        botName={
+          bot?.name ??
+          hub.state.teams?.find((team) => team.id === teamId)?.name ??
+          ""
+        }
         disabled
         busy={false}
         onSend={() => {}}
@@ -164,6 +172,58 @@ function BotHeader({
       ) : null}
       {children}
     </header>
+  )
+}
+
+function TeamHeader({ teamId }: { teamId: string }) {
+  const hub = useHub()
+  const team = hub.state.teams?.find((team) => team.id === teamId)
+  const members = hub.state.bots.filter((bot) => bot.teamId === teamId)
+  const [editing, setEditing] = useState(false)
+  return (
+    <>
+      <header className="col-header justify-between gap-2">
+        <SidebarToggle back />
+        <h1 className="min-w-0 flex-1 truncate text-[15px] font-medium text-kumo-default md:text-center">
+          {team?.name ?? "Team"}
+        </h1>
+        <button
+          type="button"
+          aria-label={`Edit ${team?.name ?? "team"} team`}
+          className="icon-btn shrink-0"
+          disabled={!hub.live || !team}
+          onClick={() => setEditing(true)}
+        >
+          <FileEditIcon size={18} />
+        </button>
+      </header>
+      {members.length ? (
+        <nav
+          aria-label="Team members"
+          className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-kumo-line px-4 pb-2 md:justify-center-safe"
+        >
+          {members.map((member) => (
+            <Link
+              key={member.id}
+              to="/bots/$botId"
+              params={{ botId: member.id }}
+              aria-label={`Open ${member.name}’s individual chat`}
+              className="pressable flex min-h-9 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs text-kumo-subtle outline-none hover:bg-(--fill-hover) focus-visible:ring-2 focus-visible:ring-kumo-focus focus-visible:ring-inset"
+            >
+              <BotAvatar avatar={member.avatar} size={22} />
+              {member.name}
+            </Link>
+          ))}
+        </nav>
+      ) : (
+        <p className="px-4 pb-3 text-center text-sm text-kumo-subtle">
+          Add agents to start this conversation.
+        </p>
+      )}
+      {editing && team ? (
+        <BotTeamDialog team={team} onClose={() => setEditing(false)} />
+      ) : null}
+    </>
   )
 }
 
@@ -233,6 +293,16 @@ function BotLayout({
     () => ({ botId, state, agent, send, busy }),
     [botId, state, agent, send, busy]
   )
+
+  const teamId = teamIdFromThread(botId)
+  if (teamId) {
+    return (
+      <section className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+        <TeamHeader teamId={teamId} />
+        {children}
+      </section>
+    )
+  }
 
   return (
     <BotContext.Provider value={context}>
@@ -313,6 +383,12 @@ function LiveBot({
     agent: "bot-agent",
     name: botInstanceName(hub.viewer.id, botId),
   })
+  const teamId = teamIdFromThread(botId)
+  const team = hub.state.teams?.find((team) => team.id === teamId)
+  const navigate = useNavigate()
+  useEffect(() => {
+    if (teamId && hub.live && !team) void navigate({ to: "/" })
+  }, [teamId, team, hub.live, navigate])
   const state = agent.state ?? initialState
   // The loader already has the history, and the socket sends it on connect.
   // By default the hook fetches it a third time and suspends until it lands.
@@ -327,8 +403,11 @@ function LiveBot({
   const paused = hub.state.bots.find((b) => b.id === botId)?.paused === true
   // Every other bot, for @mentions.
   const mentionable = useMemo(
-    () => hub.state.bots.filter((b) => b.id !== botId),
-    [hub.state.bots, botId]
+    () =>
+      hub.state.bots.filter((b) =>
+        teamId ? b.teamId === teamId : b.id !== botId
+      ),
+    [hub.state.bots, botId, teamId]
   )
   const busy = chat.status === "submitted" || chat.status === "streaming"
   const missingToolCall = chat.error?.message.startsWith(
@@ -380,7 +459,8 @@ function LiveBot({
 
   // Opening a thread clears its unread dot, including for replies that land
   // while it is open.
-  const unread = hub.state.bots.find((b) => b.id === botId)?.unread
+  const unread =
+    team?.thread?.unread ?? hub.state.bots.find((b) => b.id === botId)?.unread
   // Where the "New" divider goes: the newest reply, if it was unread when
   // the thread opened. Kept for the visit, so reading it does not move it.
   const [unreadFrom] = useState(() =>
@@ -505,6 +585,14 @@ function LiveBot({
       <Thread
         bot={state}
         messages={shown}
+        empty={
+          teamId && mentionable.length ? (
+            <p className="py-6 text-center text-sm text-kumo-subtle">
+              Ask the team a question, or use @ to choose who starts. Agents can
+              hand work to teammates in this thread.
+            </p>
+          ) : undefined
+        }
         onLoadEarlier={moreEarlier ? loadEarlier : undefined}
         busy={busy}
         botId={botId}
@@ -557,11 +645,13 @@ function LiveBot({
         </div>
       ) : null}
       <Composer
-        botName={state.name}
+        botName={team?.name ?? state.name}
+        disabled={Boolean(teamId && !mentionable.length)}
+        hideActions={Boolean(teamId)}
         busy={busy}
         onSend={(text) => send(text)}
         onStop={() => void chat.stop()}
-        onAttach={onAttach}
+        onAttach={teamId ? undefined : onAttach}
         bots={mentionable}
       />
     </BotLayout>

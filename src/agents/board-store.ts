@@ -40,7 +40,11 @@ export class BoardStore {
       .map(({ runId: _run, claimedAt: _claimed, ...task }) => task)
   }
 
-  create(input: unknown, author: string | null, id: string = crypto.randomUUID()) {
+  create(
+    input: unknown,
+    author: string | null,
+    id: string = crypto.randomUUID()
+  ) {
     const draft = boardDraftSchema.parse(input)
     if (
       this.sql.exec("SELECT 1 FROM board_tasks WHERE id = ?", id).toArray()
@@ -174,6 +178,24 @@ export class BoardStore {
       id,
       runId,
       botId
+    )
+  }
+
+  staleClaims(before: number) {
+    return this.sql
+      .exec<{ id: string; runId: string; assigneeId: string }>(
+        `SELECT id, runId, assigneeId FROM board_tasks WHERE status = 'running' AND claimedAt < ? AND runId IS NOT NULL AND assigneeId IS NOT NULL`,
+        before
+      )
+      .toArray()
+  }
+
+  renewClaim(id: string, runId: string, now: number) {
+    this.sql.exec(
+      `UPDATE board_tasks SET claimedAt = ? WHERE id = ? AND runId = ? AND status = 'running'`,
+      now,
+      id,
+      runId
     )
   }
 

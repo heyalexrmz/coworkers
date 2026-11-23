@@ -88,11 +88,11 @@ export function operationTools(
  * Run an operation for the signed-in user, from a browser callable. A
  * refusal becomes an error, as callables reported before.
  */
-export async function runAsUser<I, O>(
-  op: Operation<I, O>,
+export async function runAsUser<TInput, TOutput>(
+  op: Operation<TInput, TOutput>,
   ctx: Omit<OperationContext, "caller" | "requestId" | "approved">,
-  input: I
-): Promise<O> {
+  input: TInput
+): Promise<TOutput> {
   const result = await runOperation(
     op,
     { ...ctx, caller: { kind: "user" }, requestId: null, approved: false },

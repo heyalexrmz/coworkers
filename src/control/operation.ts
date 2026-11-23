@@ -14,11 +14,11 @@ import type {
  * caller and the ports, then hand the call to `runOperation` in
  * `./access.ts`, which checks it before `run` sees it.
  */
-export interface Operation<I = unknown, O = unknown> {
+export interface Operation<TInput = unknown, TOutput = unknown> {
   name: string
   /** What the model reads. Short and instructive: what to keep, what not to do. */
   description: string
-  input: z.ZodType<I>
+  input: z.ZodType<TInput>
   /** The access level a caller needs. */
   level: AccessLevel
   /** Destructive operations always ask, unless the user does them in the browser. */
@@ -28,16 +28,17 @@ export interface Operation<I = unknown, O = unknown> {
   /** The rule that governs it when a bot calls it. Absent: always allowed. */
   actionClass?: ActionClass
   /** Refuses input that would give more than the caller has. */
-  ceiling?: (caller: Caller, input: I) => Failure | null
-  run: (ctx: OperationContext, input: I) => Promise<O | Failure>
+  ceiling?: (caller: Caller, input: TInput) => Failure | null
+  run: (ctx: OperationContext, input: TInput) => Promise<TOutput | Failure>
 }
 
-export function defineOperation<I, O>(op: Operation<I, O>) {
+export function defineOperation<TInput, TOutput>(
+  op: Operation<TInput, TOutput>
+) {
   return op
 }
 
 /** Any operation, for the registry and transports, which only pass input through. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyOperation = Operation<any, unknown>
 
 // ── Callers ─────────────────────────────────────────────────────────

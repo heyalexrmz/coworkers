@@ -140,8 +140,8 @@ export function BotTeamDialog({
               <div>
                 {confirmDelete ? (
                   <p className="text-xs text-kumo-subtle">
-                    The agents in this team will move to Ungrouped. No agents or
-                    chats will be deleted.
+                    This removes the team conversation. Its agents move to
+                    Ungrouped and keep their individual chats.
                   </p>
                 ) : null}
                 <button

@@ -19,7 +19,9 @@ import jq from "@cloudflare/computer/shell/jq"
 import { createAITools } from "@cloudflare/computer/tools/ai-sdk"
 import { Think } from "@cloudflare/think"
 import type {
+  ChatRecoveryContext,
   ChatResponseResult,
+  ThinkSubmissionInspection,
   ThinkIntervalSchedule,
   PrepareStepContext,
   StepConfig,
@@ -34,7 +36,14 @@ import { createBrowserRuntime } from "@cloudflare/think/tools/browser"
 import type { BrowserRuntime } from "@cloudflare/think/tools/browser"
 import { env, exports } from "cloudflare:workers"
 import { boardDraftSchema } from "@/lib/board"
-import { isDirectTeamRequest } from "@/lib/bot-teams"
+import {
+  isDirectTeamRequest,
+  TEAM_REPLY_TOOL,
+  teamReplyOutput,
+} from "@/lib/bot-teams"
+import { plainMentions } from "@/lib/bot-links"
+import { teamConversation } from "./team-conversation"
+import type { TeamTurn } from "./team-conversation"
 import { routineScheduleTime } from "@/lib/routine-schedule"
 import {
   attachmentKey,
@@ -42,6 +51,7 @@ import {
   safeAttachmentName,
 } from "@/lib/attachments"
 import { callable, getAgentByName } from "agents"
+import type { Schedule } from "agents"
 import { CHAT_MESSAGE_TYPES } from "agents/chat"
 import {
   CLIENT_MESSAGES,
@@ -57,7 +67,7 @@ import {
   routingManaged,
 } from "./email-routing"
 import type { AgentEmail } from "agents/email"
-import { jsonSchema, tool } from "ai"
+import { generateText, jsonSchema, tool } from "ai"
 import type { JSONSchema7, ToolSet, UIMessage } from "ai"
 import PostalMime from "postal-mime"
 import type { ModelSettings } from "@/lib/models"
@@ -68,6 +78,7 @@ import {
   NEW_BOT_NAME,
   NO_UPDATE,
   appPath,
+  teamIdFromThread,
 } from "@/lib/types"
 import type {
   ActionClass,
@@ -84,6 +95,7 @@ import type {
   BotState,
   BotStatus,
   BotTask,
+  TeamContribution,
   BrowserFrame,
   DeskCardInput,
   MessageMeta,
@@ -168,6 +180,7 @@ import type {
   HubPort,
 } from "@/control/operation"
 import { LoopGuard, TurnBudget, shapeToolResults } from "./guards"
+import { hasUnconfirmedWrite, JobHandoffs } from "./job-handoffs"
 import { presentMcpImages } from "./mcp-tool-images"
 import { appToolModelOutput, unwrapToolResult } from "./mcp-tool-result"
 import { failureCard, replyCard, scriptCard, waitingCard } from "./desk"
@@ -740,6 +753,11 @@ export class BotAgent extends Think<Env, BotState> {
   #loopGuard = new LoopGuard()
   /** Paces a turn the user is watching: updates, wrap-up, hard stop. */
   #budget = new TurnBudget()
+  #jobFlush?: Promise<void>
+
+  private get jobHandoffs() {
+    return new JobHandoffs(this.ctx.storage.kv)
+  }
   #forcedTeamRequestId: string | undefined
   /** Results of scripts this isolate started or is watching, by run id. */
   #scripts = new Map<string, Promise<WorkspaceRuntimeResult<"utf8">>>()
@@ -782,6 +800,10 @@ export class BotAgent extends Think<Env, BotState> {
 
   private get botId() {
     return this.name.slice(this.name.lastIndexOf(":") + 1)
+  }
+
+  private get isTeamThread() {
+    return teamIdFromThread(this.botId) !== null
   }
 
   private hub() {
@@ -1052,16 +1074,16 @@ export class BotAgent extends Think<Env, BotState> {
     for (const id of Object.keys(this.getMcpServers().servers)) {
       await this.removeMcpServer(id)
     }
-    // A turn cannot survive the isolate going away mid-status, so anything
-    // other than a pending approval is stale on a fresh start.
+    // In-memory status belongs to the old isolate. Think restores durable
+    // turns separately and reports thinking when they actually resume.
     if (this.state.status === "thinking" || this.state.status === "working") {
       this.setState({ ...this.state, status: "idle" })
     }
     if (!this.getSchedules().some((s) => s.callback === "sweepStuck")) {
       await this.scheduleEvery(15 * 60, "sweepStuck")
     }
-    // No turn survives a restart, but its scripts do (they replay), so
-    // their results come back as messages. pollScripts resumes them.
+    if (this.jobHandoffs.pending) await this.schedule(1, "recoverJobHandoffs")
+    // Scripts replay independently of the model turn that launched them.
     this
       .sql`UPDATE script_runs SET status = 'detached' WHERE status = 'running'`
     if (this.openScripts().length) await this.ensureScriptPoll(1)
@@ -1258,6 +1280,7 @@ export class BotAgent extends Think<Env, BotState> {
 
   /** What the user installed, then what this bot learned (first name wins). */
   override getSkills() {
+    if (this.isTeamThread) return []
     return [
       learnedSkillSource(
         () => this.state.skills ?? [],
@@ -1304,6 +1327,22 @@ export class BotAgent extends Think<Env, BotState> {
 
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig> {
     await this.setStatus("thinking")
+    if (this.isTeamThread) {
+      this.#loopGuard.reset()
+      const hub = await this.hub()
+      this.#models = await hub.modelSettings()
+      return {
+        model: this.modelFor(false),
+        instructions:
+          "Call ask_team once to deliver the latest user message to the team. The tool displays actual agent replies directly; do not speak for the agents.",
+        activeTools: [TEAM_REPLY_TOOL],
+        toolChoice: { type: "tool", toolName: TEAM_REPLY_TOOL },
+        maxSteps: 1,
+        messages: ctx.messages.slice(-1),
+        sendReasoning: false,
+        chatStreamStallTimeoutMs: 90_000,
+      }
+    }
     const system = (await this.refreshSoulIfChanged()) ?? ctx.system
     let others: Awaited<ReturnType<UserHub["listBots"]>> = []
     let catalog: AppCatalog = { apps: [], tools: [] }
@@ -1595,7 +1634,114 @@ export class BotAgent extends Think<Env, BotState> {
     return tools
   }
 
+  /** A separate conversation: read-only replies from the member's own model
+   * and role, without reading or updating the member's one-to-one chat. */
+  async answerTeamQuestion(
+    name: string,
+    team: string,
+    turn: TeamTurn,
+    settings: ModelSettings
+  ): Promise<TeamContribution> {
+    const model = pickModel(this.env, settings, this.state.model, false)
+    const peers = turn.available
+      .map(
+        (member) =>
+          `${member.id}: ${member.name}${member.role ? ` — ${member.role}` : ""}`
+      )
+      .join("\n")
+    const instruction = {
+      greeting:
+        "Reply naturally and briefly to the greeting in the user’s language. Don’t start work, resume an old task, or speak for others.",
+      "wrap-up":
+        "This is the wrap-up, not a new assignment. The recorded handoffs have already been sent. Do not resend them or discuss tool availability; lead with the outcome and use the teammates’ actual findings. Resolve differences where possible and say what remains uncertain. Do not just repeat your opening message.",
+      teammate: `Reply to ${turn.from === "You" ? "the user" : turn.from} about the specific handoff below. Build on or challenge what the others actually said. Return findings, not another assignment.`,
+      lead: "Lead this turn. Answer the latest message first. Earlier conversation is background, not a queue of work: do not resume, assign, or finish an earlier task unless the latest message asks to continue it. Answer simple questions directly. When the latest message calls for collaboration or another role can meaningfully contribute to it, use delegate_to_teammate with a specific subtask or review question. Do not claim you consulted a teammate unless you use the tool. If you delegate, keep your opening brief and leave the conclusion until their replies come back.",
+    }[turn.phase]
+    const handoff = z.object({
+      botId: z.string(),
+      task: z.string().trim().min(1).max(1200),
+    })
+    const response = await generateText({
+      model: languageModel(this.env, model, {
+        settings,
+        metadata: { bot: name, botId: this.botId, turn: "team" },
+      }),
+      system: `You are ${name}, an agent on the ${team} team. Your role: ${this.state.role || "Help the user with their request."}\nSpeak only for yourself. This room can exchange messages with teammates but cannot access apps, external actions, or private chats. Never claim to have used them. ${instruction}${peers ? `\nAvailable teammates (use exact IDs):\n${peers}` : ""}`,
+      prompt: `${turn.history ? `Earlier team messages (for reference):\n${turn.history}\n\n` : ""}Latest user message:\n${plainMentions(turn.question)}${turn.task ? `\n\nHandoff from ${turn.from}:\n${turn.task}` : ""}`,
+      tools: turn.available.length
+        ? {
+            delegate_to_teammate: tool({
+              description:
+                "Ask a teammate for a specific contribution. Their actual reply comes back in this team thread before you wrap up.",
+              inputSchema: handoff,
+            }),
+          }
+        : undefined,
+      maxOutputTokens: 1800,
+      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(turn.timeLimitMs),
+    })
+    const requests = response.toolCalls.flatMap((call) => {
+      if (call.toolName !== "delegate_to_teammate" || call.invalid) return []
+      const parsed = handoff.safeParse(call.input)
+      return parsed.success ? [parsed.data] : []
+    })
+    if (!response.text.trim() && !requests.length)
+      throw new Error("The model returned no reply.")
+    return { text: clip(response.text.trim(), 8_000), requests }
+  }
+
   override getTools(): ToolSet {
+    if (this.isTeamThread) {
+      const room = this
+      return {
+        [TEAM_REPLY_TOOL]: tool({
+          description:
+            "Deliver the latest message to the team and display the resulting discussion and handoffs.",
+          inputSchema: z.object({}),
+          async *execute(_, { abortSignal }) {
+            const messages = room.messages
+            const index = messages.findLastIndex(
+              (message) => message.role === "user"
+            )
+            const question = clip(textOf(messages[index]), 12_000)
+            if (!question.trim()) {
+              yield { replies: [], note: "Write a message to the team first." }
+              return
+            }
+            const history = messages
+              .slice(Math.max(0, index - 16), index)
+              .map((message) => {
+                if (message.role === "user")
+                  return `User: ${plainMentions(textOf(message))}`
+                return (
+                  teamReplyOutput(message.parts)
+                    ?.replies.filter((reply) => !reply.unavailable)
+                    .map((reply) => `${reply.name}: ${reply.text}`)
+                    .join("\n") ?? ""
+                )
+              })
+              .filter(Boolean)
+              .join("\n\n")
+              .slice(-16_000)
+            const hub = await room.hub()
+            const members = await hub.teamRoster(room.botId)
+            if (!members) {
+              yield { replies: [], note: "This team no longer exists." }
+              return
+            }
+            yield* teamConversation({
+              members,
+              question,
+              history,
+              signal: abortSignal,
+              contribute: (botId, turn) =>
+                hub.askTeamMember(room.botId, botId, turn),
+            })
+          },
+        }),
+      }
+    }
     const tools: ToolSet = {
       ...createAITools({
         workspace: this.workspace,
@@ -4468,6 +4614,7 @@ export class BotAgent extends Think<Env, BotState> {
 
   /** Keep long turns inside the context window (see shapeToolResults). */
   override beforeStep(ctx: PrepareStepContext): StepConfig | void {
+    if (this.isTeamThread) return
     const shaped = shapeToolResults(ctx.messages)
     const withImages = presentMcpImages(shaped ?? ctx.messages)
     const nudge = this.paceStep(ctx)
@@ -4506,6 +4653,62 @@ export class BotAgent extends Think<Env, BotState> {
     const last = ctx.steps.at(-1)
     if (last?.text.trim()) this.#budget.spoke(now)
     return this.#budget.check(now)
+  }
+
+  private jobWriteIds(requestId: string) {
+    return this.ctx.storage.kv.get<string[]>(`job_writes:${requestId}`) ?? []
+  }
+
+  protected override async onChatRecovery(ctx: ChatRecoveryContext) {
+    if (this.isTeamThread && teamReplyOutput(ctx.partialParts)) {
+      // Preserve the conversation-so-far; do not repeat visible handoffs.
+      return { continue: false }
+    }
+    const meta = metaOf(
+      ctx.messages.findLast((message) => message.role === "user")
+    )
+    const task = meta.task?.replyTo.kind === "board" ? meta.task : undefined
+    if (!task && !meta.routine) return
+    if (
+      !hasUnconfirmedWrite(
+        ctx.partialParts,
+        (name) => READ_ONLY_TOOLS.has(name) || this.#readOnlyAppTools.has(name),
+        this.jobWriteIds(ctx.requestId)
+      )
+    )
+      return
+    const error =
+      "An external action may already have happened. Check the destination before retrying."
+    if (task)
+      await this.reportTask(task, {
+        status: "stopped",
+        text: ctx.partialText,
+        error,
+      })
+    if (meta.routine) {
+      this
+        .sql`UPDATE routine_runs SET status = 'stopped', finished_at = ${Date.now()}, note = ${error}
+        WHERE id = ${meta.routine.runId} AND status IN ('running', 'waiting')`
+    }
+    return { continue: false }
+  }
+
+  protected override onSubmissionStatus(submission: ThinkSubmissionInspection) {
+    if (
+      submission.requestId &&
+      ["completed", "aborted", "skipped", "error"].includes(submission.status)
+    ) {
+      this.ctx.storage.kv.delete(`job_writes:${submission.requestId}`)
+    }
+    if (
+      submission.submissionId.startsWith("routine:") &&
+      ["aborted", "skipped", "error"].includes(submission.status)
+    ) {
+      this
+        .sql`UPDATE routine_runs SET status = 'stopped', finished_at = ${Date.now()},
+        note = 'The turn did not finish. Check the conversation before retrying.'
+        WHERE id = ${submission.submissionId} AND status = 'running'`
+    }
   }
 
   /**
@@ -4570,6 +4773,22 @@ export class BotAgent extends Think<Env, BotState> {
             : "This is background work and this action needs the user's approval, which they cannot give right now. Do not retry. If it matters, tell them what you would do.",
       }
     }
+    if (
+      ctx.requestId &&
+      !READ_ONLY_TOOLS.has(ctx.toolName) &&
+      !this.#readOnlyAppTools.has(ctx.toolName)
+    ) {
+      const meta = metaOf(this.messages.findLast((m) => m.role === "user"))
+      if (meta.routine || meta.task?.replyTo.kind === "board") {
+        const writes = this.jobWriteIds(ctx.requestId)
+        if (!writes.includes(ctx.toolCallId)) {
+          this.ctx.storage.kv.put(`job_writes:${ctx.requestId}`, [
+            ...writes,
+            ctx.toolCallId,
+          ])
+        }
+      }
+    }
     if (ctx.toolName !== "set_name" && ctx.toolName !== "set_context") {
       void this.setStatus("working")
     }
@@ -4621,6 +4840,22 @@ export class BotAgent extends Think<Env, BotState> {
   }
 
   override async onChatResponse(result: ChatResponseResult) {
+    if (this.isTeamThread) {
+      await this.setStatus("idle")
+      const reply = teamReplyOutput(result.message.parts)?.replies.findLast(
+        (item) => !item.unavailable
+      )
+      if (reply) {
+        await this.hub()
+          .then((hub) =>
+            hub.reportTeamReply(this.botId, reply.name, reply.text)
+          )
+          .catch((error) =>
+            console.error("Reporting the team preview failed", error)
+          )
+      }
+      return
+    }
     this.#turnActive = false
     void this.applyHeldApprovals()
     const trigger = this.triggerOf(result.message)
@@ -4656,6 +4891,7 @@ export class BotAgent extends Think<Env, BotState> {
       ...(background ? { lastCheckIn: Date.now() } : {}),
     })
     this.syncDesk()
+    this.ctx.storage.kv.delete(`job_writes:${result.requestId}`)
 
     // Nothing worth saying: drop the turn so it neither shows up nor
     // fills the context. Deleting re-parents anything that came after.
@@ -4855,6 +5091,7 @@ export class BotAgent extends Think<Env, BotState> {
       }
     }
     try {
+      await this.recoverJobHandoffs()
       await this.settleStranded(now)
     } catch (err) {
       console.error("Settling stranded work failed", err)
@@ -5125,6 +5362,7 @@ export class BotAgent extends Think<Env, BotState> {
       routine?: MessageMeta["routine"]
       task?: BotTask
       taskResult?: MessageMeta["taskResult"]
+      submissionId?: string
     } = {}
   ) {
     const metadata: MessageMeta = {
@@ -5138,6 +5376,7 @@ export class BotAgent extends Think<Env, BotState> {
     }
     return this.runTurn({
       mode: "submit",
+      submissionId: options.submissionId,
       idempotencyKey: options.key,
       input: {
         id: crypto.randomUUID(),
@@ -5168,6 +5407,7 @@ export class BotAgent extends Think<Env, BotState> {
       {
         background: true,
         key: `board:${runId}`,
+        submissionId: `board:${runId}`,
         task: { id: runId, replyTo: { kind: "board", cardId } },
       }
     )
@@ -5179,6 +5419,36 @@ export class BotAgent extends Think<Env, BotState> {
       throw new Error(submission.error ?? `Board turn ${submission.status}`)
     }
     return true
+  }
+
+  /** Keep a Board claim while the durable turn or its approval is still open. */
+  async boardRunIsActive(runId: string) {
+    if (this.jobHandoffs.hasBoardResult(runId)) {
+      // Never call back into the hub while it is waiting on this RPC.
+      if (
+        !this.getSchedules().some((s) => s.callback === "recoverJobHandoffs")
+      ) {
+        await this.schedule(1, "recoverJobHandoffs")
+      }
+      return true
+    }
+    const submission = await this.inspectSubmission(`board:${runId}`)
+    if (submission?.status === "pending" || submission?.status === "running")
+      return true
+    // Also handles approval cards from before submissions had an explicit ID.
+    const messages = this.messages
+    const start = messages.findIndex(
+      (m) => m.role === "user" && metaOf(m).task?.id === runId
+    )
+    if (start < 0) return false
+    for (
+      let i = start + 1;
+      i < messages.length && messages[i].role !== "user";
+      i++
+    ) {
+      if (messages[i].parts.some((part) => pendingApprovalId(part))) return true
+    }
+    return false
   }
 
   /**
@@ -5555,8 +5825,24 @@ export class BotAgent extends Think<Env, BotState> {
     ended: { status: TaskOutcome["status"]; text: string; error?: string }
   ) {
     const doneKey = `task_done:${task.id}`
-    // Recovery can deliver the hook twice; only the first one reports.
+    // Recovery can deliver the hook twice; only the first outcome counts.
     if (this.ctx.storage.kv.get(doneKey) !== undefined) return
+    if (task.replyTo.kind === "board") {
+      // Board completion is fenced by card, bot and run ID. Persist the
+      // outcome before the RPC so a lost acknowledgment cannot lose it.
+      this.jobHandoffs.stage({
+        kind: "board-result",
+        task,
+        outcome: {
+          status: ended.status,
+          result: isNoUpdate(ended.text) ? "" : clip(ended.text, 4000),
+          error: ended.error,
+        },
+      })
+      this.ctx.storage.kv.delete(`task_files:${task.id}`)
+      await this.recoverJobHandoffs()
+      return
+    }
     this.ctx.storage.kv.put(doneKey, Date.now())
     const filesKey = `task_files:${task.id}`
     const paths = this.ctx.storage.kv.get<string[]>(filesKey) ?? []
@@ -5581,6 +5867,50 @@ export class BotAgent extends Think<Env, BotState> {
       await hub.completeTask(this.botId, task, outcome)
     } catch (err) {
       console.error("Reporting a task result failed", err)
+    }
+  }
+
+  /** Resume handoffs using the same IDs, never by re-running the agent's tools. */
+  async recoverJobHandoffs() {
+    if (this.#jobFlush) return this.#jobFlush
+    if (!this.jobHandoffs.pending) return
+    const attempt = this.jobHandoffs
+      .flush(
+        async (job) => {
+          if (job.kind === "board-result") {
+            await (
+              await this.hub()
+            ).completeTask(this.botId, job.task, job.outcome)
+            this.ctx.storage.kv.put(`task_done:${job.task.id}`, Date.now())
+            return
+          }
+          const runId = job.routine.runId
+          const submission = await this.submitAs(
+            { kind: "routine", name: job.name },
+            job.text,
+            {
+              background: true,
+              key: runId,
+              submissionId: runId,
+              routine: job.routine,
+            }
+          )
+          this.onSubmissionStatus(submission)
+        },
+        (error) => console.error("Delivering a saved job handoff failed", error)
+      )
+      .finally(() => {
+        this.#jobFlush = undefined
+      })
+    this.#jobFlush = attempt
+    await attempt
+    if (
+      this.jobHandoffs.pending &&
+      !this.getSchedules().some(
+        (s) => s.callback === "recoverJobHandoffs" && s.time * 1000 > Date.now()
+      )
+    ) {
+      await this.schedule(60, "recoverJobHandoffs")
     }
   }
 
@@ -5656,18 +5986,24 @@ export class BotAgent extends Think<Env, BotState> {
   }
 
   /** Schedule callback. */
-  async runRoutine(payload: RoutinePayload) {
+  async runRoutine(
+    payload: RoutinePayload,
+    schedule?: Schedule<RoutinePayload>
+  ) {
+    await this.startRoutineRun(payload, 1, schedule)
     if (payload.kind === "once") {
       this.setState({
         ...this.state,
         routines: this.state.routines.filter((r) => r.id !== payload.id),
       })
     }
-    await this.startRoutineRun(payload, 1)
   }
 
   /** Schedule callback: the one retry after a run failed before doing anything. */
-  async retryRoutine(payload: RoutinePayload) {
+  async retryRoutine(
+    payload: RoutinePayload,
+    schedule?: Schedule<RoutinePayload>
+  ) {
     // A recurring routine deleted since the failure stays deleted.
     if (
       payload.kind === "cron" &&
@@ -5675,15 +6011,25 @@ export class BotAgent extends Think<Env, BotState> {
     ) {
       return
     }
-    await this.startRoutineRun(payload, 2)
+    await this.startRoutineRun(payload, 2, schedule)
   }
 
-  private async startRoutineRun(payload: RoutinePayload, attempt: number) {
+  private async startRoutineRun(
+    payload: RoutinePayload,
+    attempt: number,
+    schedule?: Schedule<RoutinePayload>
+  ) {
     const now = Date.now()
+    const runId = schedule
+      ? `routine:${schedule.id}:${schedule.time}:${attempt}`
+      : `routine:${crypto.randomUUID()}`
+    if (this.sql`SELECT id FROM routine_runs WHERE id = ${runId}`.length) {
+      await this.recoverJobHandoffs()
+      return
+    }
     const busy = this.sql<{ id: string }>`SELECT id FROM routine_runs
       WHERE routine_id = ${payload.id} AND status = 'running'
         AND started_at > ${now - ROUTINE_OVERLAP_MS} LIMIT 1`
-    const runId = crypto.randomUUID()
     if (this.state.paused) {
       this
         .sql`INSERT INTO routine_runs (id, routine_id, name, started_at, finished_at, status, attempt, note)
@@ -5715,12 +6061,7 @@ export class BotAgent extends Think<Env, BotState> {
       }
       changeNote = check.note
     }
-    this
-      .sql`INSERT INTO routine_runs (id, routine_id, name, started_at, status, attempt)
-      VALUES (${runId}, ${payload.id}, ${payload.name}, ${now}, 'running', ${attempt})`
-    this.trimRoutineRuns()
-    await this.submitAs(
-      { kind: "routine", name: payload.name },
+    const text =
       routinePrompt({
         id: payload.id,
         name: payload.name,
@@ -5728,15 +6069,22 @@ export class BotAgent extends Think<Env, BotState> {
         onlyNew: payload.onlyNew === true,
         reported: payload.onlyNew ? this.reportedFor(payload.id) : [],
         timeZone: this.state.proactive.timezone,
-      }) + changeNote,
-      {
-        background: true,
-        // One submission per routine, attempt and minute: an alarm that
-        // fires twice for the same slot does not start a second run.
-        key: `routine:${payload.id}:${attempt}:${Math.floor(now / 60_000)}`,
+      }) + changeNote
+    // Commit the history row and the replayable handoff together.
+    this.ctx.storage.transactionSync(() => {
+      const inserted = this
+        .sql`INSERT OR IGNORE INTO routine_runs (id, routine_id, name, started_at, status, attempt)
+        VALUES (${runId}, ${payload.id}, ${payload.name}, ${now}, 'running', ${attempt}) RETURNING id`
+      if (!inserted.length) return
+      this.jobHandoffs.stage({
+        kind: "routine-submit",
+        name: payload.name,
+        text,
         routine: { id: payload.id, runId, attempt },
-      }
-    )
+      })
+      this.trimRoutineRuns()
+    })
+    await this.recoverJobHandoffs()
   }
 
   /**
@@ -5910,9 +6258,28 @@ export class BotAgent extends Think<Env, BotState> {
     }
 
     const error = clip(result.error?.trim() || "The model call failed.", 300)
-    const didWork = result.message.parts.some(
-      (p) => p.type.startsWith("tool-") || p.type === "dynamic-tool"
+    const messages = this.messages
+    const trigger = messages.findIndex(
+      (m) => m.role === "user" && metaOf(m).routine?.runId === run.runId
     )
+    const hasTool = (m: UIMessage) =>
+      m.parts.some(
+        (p) => p.type.startsWith("tool-") || p.type === "dynamic-tool"
+      )
+    // A recovered continuation may see none of the original tool parts in
+    // its final message. Inspect the whole run; if the trigger is missing,
+    // there is no evidence that retrying a write would be safe.
+    let didWork =
+      trigger < 0 ||
+      hasTool(result.message) ||
+      this.jobWriteIds(result.requestId).length > 0
+    for (
+      let i = trigger + 1;
+      !didWork && i < messages.length && messages[i].role !== "user";
+      i++
+    ) {
+      didWork = hasTool(messages[i])
+    }
     const next = this.nextRoutineRun(run.id)
     const nextIsSoon = next !== null && next - now < ROUTINE_RETRY_SKIP_MS
     // Retry only a run that failed before touching anything, so a retry can

@@ -9,6 +9,7 @@ interface BotAvatarProps {
   status?: BotStatus
   /** Follow the pointer and hop on click. Off for small inline avatars. */
   interactive?: boolean
+  staticPose?: boolean
   className?: string
 }
 
@@ -31,6 +32,7 @@ export function BotAvatar({
   size = 44,
   status = "idle",
   interactive = false,
+  staticPose = false,
   className,
 }: BotAvatarProps) {
   const h = hash(avatar)
@@ -49,6 +51,7 @@ export function BotAvatar({
       state={STATE_FOR_STATUS[status]}
       size={size}
       interactive={interactive}
+      paused={staticPose}
       floorShadow={size >= 56}
       antenna={false}
       seed={(h % 1000) / 1000}

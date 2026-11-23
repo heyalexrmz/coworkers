@@ -20,7 +20,13 @@ import webpush from "web-push"
 import { DEFAULT_MODEL_SETTINGS, isModelId } from "@/lib/models"
 import type { ModelSettings, ModelTestResult } from "@/lib/models"
 import { botIdFromLink } from "@/lib/bot-links"
-import { BOT_AVATARS, NEW_BOT_NAME, botInstanceName } from "@/lib/types"
+import {
+  BOT_AVATARS,
+  NEW_BOT_NAME,
+  botInstanceName,
+  teamIdFromThread,
+  teamThreadId,
+} from "@/lib/types"
 import { emailDirectory } from "./email-directory"
 import { SHOP_MCP_URL } from "@/lib/shop"
 import type {
@@ -52,6 +58,8 @@ import type {
   SkillPreview,
   SpendSummary,
   TaskOutcome,
+  TeamContribution,
+  TeamParticipant,
 } from "@/lib/types"
 import * as ops from "@/control/bots"
 import { runAsUser } from "@/control/operations"
@@ -64,6 +72,7 @@ import type {
   HubPort,
 } from "@/control/operation"
 import type { BotAgent } from "./bot-agent"
+import type { TeamTurn } from "./team-conversation"
 import { demoSeed } from "./demo-seed"
 import {
   SkillSourceError,
@@ -652,6 +661,94 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
   deleteBotTeam(id: string) {
     if (!this.state.teams?.some((team) => team.id === id)) return
     this.setState({ ...this.state, ...removeTeam(this.state, id) })
+    this.ctx.waitUntil(
+      this.botStub(teamThreadId(id))
+        .then((thread) => thread.destroy())
+        .catch((error) => {
+          // destroy() aborts the isolate and may reject even after deleting it.
+          console.warn(`Team thread ${id} teardown reported`, error)
+        })
+    )
+  }
+
+  hasTeamThread(botId: string) {
+    return (
+      this.state.teams?.some((team) => team.id === teamIdFromThread(botId)) ??
+      false
+    )
+  }
+
+  teamRoster(botId: string): TeamParticipant[] | null {
+    if (!this.hasTeamThread(botId)) return null
+    return this.state.bots
+      .filter((bot) => bot.teamId === teamIdFromThread(botId))
+      .map(({ id, name, avatar, role, paused }) => ({
+        id,
+        name,
+        avatar,
+        role,
+        paused,
+      }))
+  }
+
+  async askTeamMember(
+    threadId: string,
+    memberId: string,
+    turn: TeamTurn
+  ): Promise<TeamContribution> {
+    const team = this.state.teams?.find(
+      (team) => team.id === teamIdFromThread(threadId)
+    )
+    const member = this.teamRoster(threadId)?.find((bot) => bot.id === memberId)
+    if (!team || !member || member.paused) {
+      return {
+        text: member?.paused
+          ? "This agent is paused."
+          : "This agent is no longer on the team.",
+        requests: [],
+        unavailable: true,
+      }
+    }
+    try {
+      const [bot, settings] = await Promise.all([
+        this.bot(memberId),
+        this.modelSettings(),
+      ])
+      return await bot.answerTeamQuestion(
+        member.name,
+        team.name,
+        turn,
+        settings
+      )
+    } catch (error) {
+      console.error(`Team reply from ${memberId} failed`, error)
+      return {
+        text: "Couldn’t reply to this part of the conversation.",
+        requests: [],
+        unavailable: true,
+      }
+    }
+  }
+
+  reportTeamReply(botId: string, author: string, preview: string) {
+    const id = teamIdFromThread(botId)
+    if (!this.hasTeamThread(botId)) return
+    this.setState({
+      ...this.state,
+      teams: this.state.teams?.map((team) =>
+        team.id === id
+          ? {
+              ...team,
+              thread: {
+                author,
+                preview: clip(preview, 180),
+                updatedAt: Date.now(),
+                unread: true,
+              },
+            }
+          : team
+      ),
+    })
   }
 
   /** Onboarding's first bot: one that sets up and runs the others. */
@@ -678,6 +775,21 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
 
   @callable()
   markRead(botId: string) {
+    const teamId = teamIdFromThread(botId)
+    if (teamId) {
+      const teams = this.state.teams ?? []
+      if (teams.some((team) => team.id === teamId && team.thread?.unread)) {
+        this.setState({
+          ...this.state,
+          teams: teams.map((team) =>
+            team.id === teamId && team.thread
+              ? { ...team, thread: { ...team.thread, unread: false } }
+              : team
+          ),
+        })
+      }
+      return
+    }
     if (this.state.bots.find((b) => b.id === botId)?.unread) {
       this.patchBot(botId, { unread: false })
     }
@@ -1212,11 +1324,17 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
   async botSnapshot(
     botId: string
   ): Promise<{ state: BotState; messagesJson: string } | null> {
-    if (!this.state.bots.some((b) => b.id === botId)) return null
+    const team = this.state.teams?.find(
+      (team) => team.id === teamIdFromThread(botId)
+    )
+    if (!team && !this.state.bots.some((b) => b.id === botId)) return null
     const { state, messages } = await (await this.bot(botId)).snapshot()
     // As JSON: message parts hold `unknown` tool payloads, which RPC types
     // cannot carry.
-    return { state, messagesJson: JSON.stringify(messages) }
+    return {
+      state: team ? { ...(state as BotState), name: team.name } : state,
+      messagesJson: JSON.stringify(messages),
+    }
   }
 
   // ── Bot-facing (Durable Object RPC) ─────────────────────────────────
@@ -1231,6 +1349,7 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
       >
     >
   ) {
+    if (teamIdFromThread(botId)) return
     const touched = patch.preview !== undefined || patch.name !== undefined
     this.patchBot(botId, {
       ...patch,
@@ -2182,7 +2301,22 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
     if (this.#boardRunning) return
     this.#boardRunning = true
     try {
-      if (this.board.expire(Date.now() - BOARD_TIMEOUT_MS)) this.publishBoard()
+      const now = Date.now()
+      const before = now - BOARD_TIMEOUT_MS
+      // A stopped stream is not proof that the durable turn or its approval ended.
+      await Promise.all(
+        this.board
+          .staleClaims(before)
+          .map(async ({ id, runId, assigneeId }) => {
+            try {
+              if (await (await this.bot(assigneeId)).boardRunIsActive(runId))
+                this.board.renewClaim(id, runId, now)
+            } catch (error) {
+              console.error("Checking an old Board claim failed", error)
+            }
+          })
+      )
+      if (this.board.expire(before)) this.publishBoard()
       if (!this.board.hasQueue()) return
       const available = this.state.bots.filter(
         (bot) => bot.status === "idle" && !bot.paused
@@ -2217,15 +2351,9 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
               this.publishBoard()
             }
           } catch (error) {
-            // An RPC failure does not tell us whether the bot accepted the turn.
-            console.error("Board dispatch failed", error)
-            this.board.finish(row.id, runId, bot.id, {
-              status: "failed",
-              result: "",
-              error:
-                "Could not confirm delivery. Check the bot’s chat before retrying.",
-            })
-            this.publishBoard()
+            // The agent may have accepted the turn before the connection broke.
+            // Keep the fence so it can still publish a result; never start a duplicate.
+            console.error("Board dispatch acknowledgment failed", error)
           }
         }
       }
